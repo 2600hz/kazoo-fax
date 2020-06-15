@@ -1,0 +1,7 @@
+  - 'Fax - Why is everyone faxinated with fax?':
+    - 'applications/fax/doc/README.md'
+    - 'applications/fax/doc/faxbox.md'
+    - 'applications/fax/doc/haproxy.md'
+    - 'applications/fax/doc/maintenance.md'
+    - 'applications/fax/doc/postfix.md'
+    - 'applications/fax/doc/user.md'
