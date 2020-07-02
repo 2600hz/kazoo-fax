@@ -212,7 +212,7 @@ handle_DATA_exception(Options, Reference, Data) ->
             File = filename:join(["/tmp/", Reference]),
             case filelib:ensure_dir(File) of
                 'ok' ->
-                    case kz_util:write_file(File, Data) of
+                    case kz_os:write_file(File, Data) of
                         'ok' -> lager:debug("wrote DATA exception data to ~s", [File]);
                         {'error', _E} -> lager:debug("failed to write DATA exception data to ~s: ~p", [File, _E])
                     end;
@@ -930,7 +930,7 @@ maybe_process_image(CT, Body, Size, State) ->
             {'ok', NewState};
         'false' ->
             lager:debug("ignoring part ~s", [CT]),
-            kz_util:delete_file(Filename),
+            kz_os:delete_file(Filename),
             {'ok', State}
     end.
 
