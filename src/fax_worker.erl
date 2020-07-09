@@ -760,7 +760,7 @@ write_document(JObj, JobId) ->
     case kz_fax_attachment:fetch_faxable(?KZ_FAXES_DB, JObj) of
         {'ok', Content, _ContentType, Doc} ->
             Filepath = filename:join(?TMP_DIR, <<JobId/binary, ".tiff">>),
-            kz_util:write_file(Filepath, Content),
+            kz_os:write_file(Filepath, Content),
             {'ok', Filepath, Doc};
         Error -> Error
     end.

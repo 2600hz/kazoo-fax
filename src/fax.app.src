@@ -1,5 +1,5 @@
 {application,fax,
-             [{applications,[cowboy,gen_smtp,kazoo,kazoo_amqp,kazoo_apps,
+             [{applications,[cowboy,gen_smtp,kazoo_amqp,kazoo_apps,
                              kazoo_caches,kazoo_call,kazoo_data,
                              kazoo_documents,kazoo_fax,kazoo_media,kazoo_modb,
                              kazoo_numbers,kazoo_schemas,kazoo_services,
