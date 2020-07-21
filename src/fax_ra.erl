@@ -37,6 +37,7 @@
         ,process_accounts/0, process_accounts/1
         ,ra_name/0, ra_name/1
         ,start_worker/3
+        ,available_nodes/0
         ]).
 
 -include("fax.hrl").
@@ -426,7 +427,7 @@ start_worker({AccountId, JobId, Ref}) ->
     Reply = rpc:call(Node, 'fax_worker_sup', 'start_fax_job', [AccountId, JobId]),
     ra:process_command(id(), {'start_worker_result', {AccountId, JobId, Ref, Node, Reply}}).
 
-
+-spec available_nodes() -> list().
 available_nodes() ->
     {'ok', Members, _Leader} = ra:members(ra_name()),
     lists:usort([Node || {_, Node} <- Members, lists:member(Node, nodes())]).
@@ -436,6 +437,7 @@ rand_node() ->
     rand_node(available_nodes()).
 
 -spec rand_node([node()]) -> node().
+rand_node([]) -> node();
 rand_node(Nodes) ->
     Size = length(Nodes),
     Selected = rand:uniform(Size),
