@@ -445,9 +445,7 @@ end_receive_fax(JObj, #state{call=Call}=State) ->
             lager:debug("fax status - successfully received fax"),
             end_receive_fax(State#state{fax_result=JObj});
         'false' ->
-            lager:debug("fax status - receive fax failed"),
-            notify_failure(JObj, State),
-            {'stop', 'normal', State}
+            maybe_partially_received(State#state{fax_result=JObj})
     end.
 
 -spec end_receive_fax(state()) -> handle_cast_return().
@@ -460,6 +458,19 @@ end_receive_fax(#state{page=Page, fax_result=JObj}=State) when Page =:= 0 ->
     {'stop', 'normal', State#state{fax_result=NewJObj}};
 end_receive_fax(#state{}=State) ->
     {'noreply', State#state{monitor=store_document(State)}}.
+
+-spec maybe_partially_received(state()) -> handle_cast_return().
+maybe_partially_received(#state{page=Page, fax_result=JObj}=State) when Page =:= 0 ->
+    lager:debug("fax status - receive fax failed"),
+    notify_failure(JObj, State),
+    {'stop', 'normal', State};
+maybe_partially_received(#state{page=Page, fax_result=JObj}=State) ->
+    lager:debug("fax status - partially received fax with pages ~s",[Page]),
+    Props = [{[<<"Application-Data">>,<<"Fax-Success">>], 'true'}
+            ,{[<<"fax_info">>, <<"fax_result_text">>], <<"partial pages received">>}
+            ],
+    NewJObj = kz_json:set_values(Props, JObj),
+    {'noreply', State#state{fax_result=NewJObj, monitor=store_document(State)}}.
 
 -spec store_document(state()) -> kz_term:pid_ref().
 store_document(#state{}=State) ->
