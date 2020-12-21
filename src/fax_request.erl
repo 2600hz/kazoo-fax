@@ -462,7 +462,7 @@ end_receive_fax(#state{page=Page}=State) ->
 
 -spec maybe_partially_received(state()) -> handle_cast_return().
 maybe_partially_received(#state{page=Page, fax_result=JObj}=State) when Page =:= 0 ->
-    lager:info("fax status - receive fax failed with 0 pages"),
+    lager:info("fax status - receive fax failed"),
     notify_failure(JObj, State),
     {'stop', 'normal', State};
 maybe_partially_received(#state{page=Page, fax_result=JObj}=State) ->
