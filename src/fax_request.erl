@@ -465,7 +465,7 @@ maybe_partially_received(#state{page=Page, fax_result=JObj}=State) when Page =:=
     notify_failure(JObj, State),
     {'stop', 'normal', State};
 maybe_partially_received(#state{page=Page, fax_result=JObj}=State) ->
-    lager:debug("fax status - partially received fax with pages ~s",[Page]),
+    lager:debug("fax status - partially received fax with pages ~p",[Page]),
     Props = [{[<<"Application-Data">>,<<"Fax-Success">>], 'true'}
             ,{[<<"fax_info">>, <<"fax_result_text">>], <<"partial pages received">>}
             ],
