@@ -450,6 +450,7 @@ end_receive_fax(JObj, #state{call=Call}=State) ->
 
 -spec end_receive_fax(state()) -> handle_cast_return().
 end_receive_fax(#state{page=Page, fax_result=JObj}=State) when Page =:= 0 ->
+    lager:debug("fax status - receive fax failed with pages 0"),
     Props = [{[<<"Application-Data">>,<<"Fax-Success">>], 'false'}
             ,{[<<"fax_info">>, <<"fax_result_text">>], <<"no pages received">>}
             ],
