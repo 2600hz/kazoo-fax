@@ -36,7 +36,7 @@ stop(_State) ->
     _ = kapps_maintenance:unbind('migrate', 'fax_maintenance', 'migrate'),
     _ = kapps_maintenance:unbind('register_views', 'fax_app', 'register_views'),
     _ = cowboy:stop_listener('fax_file'),
-    _ = fax_ra:stop(),
+    _ = fax_ra_node:stop(),
     'ok'.
 
 -spec register_views() -> 'ok'.
