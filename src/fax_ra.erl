@@ -60,14 +60,12 @@ init(#{name := Name}) ->
           {state(), Reply :: term(), ra_machine:effects()} |
           {state(), Reply :: term()}.
 
-apply(#{index := RaftIdx}, {down, Pid, normal}, #{pids := Pids, accounts := Accounts} = State0) ->
-    case Pids of
-        #{Pid := #{account_id := AccountId
-                  ,job_id := JobId
-                  }} ->
+apply(#{index := RaftIdx}, {'down', Pid, 'normal'}, #{pids := Pids, accounts := Accounts} = State0) ->
+    case maps:get(Pid, Pids, 'undefined') of
+        #{account_id := AccountId, job_id := JobId} ->
             lager:debug("job ~s (~p) for account ~s has been finished", [JobId, Pid, AccountId]),
             Account = maps:get(AccountId, Accounts, #{jobs => #{}}),
-            Jobs = maps:without([JobId], maps:get(jobs, Account, #{})),
+            Jobs = maps:without([JobId], maps:get('jobs', Account, #{})),
             State = case maps:size(Jobs) of
                         0 -> State0#{pids => maps:without([Pid], Pids)
                                     ,accounts => maps:without([AccountId], Accounts)
@@ -76,20 +74,18 @@ apply(#{index := RaftIdx}, {down, Pid, normal}, #{pids := Pids, accounts := Acco
                                     ,accounts => maps:update(AccountId, Account#{jobs => Jobs}, Accounts)
                                     }
                     end,
-            Effects = [{demonitor, process, Pid}
-                      ,{release_cursor, RaftIdx, State}
+            Effects = [{'demonitor', 'process', Pid}
+                      ,{'release_cursor', RaftIdx, State}
                       ],
-            {State, ok, Effects};
-        _ -> {State0, ok}
+            {State, 'ok', Effects};
+        _ -> {State0, 'ok'}
     end;
 
-apply(#{index := RaftIdx}, {down, Pid, Error}, #{pids := Pids, accounts := Accounts} = State) ->
-    case Pids of
-        #{Pid := #{account_id := AccountId
-                  ,job_id := JobId
-                  }} ->
-            case Accounts of
-                #{AccountId := #{jobs := #{JobId := #{ref := Ref, raft := Index} = Job} = Jobs} = Account} ->
+apply(#{index := RaftIdx}, {'down', Pid, Error}, #{pids := Pids, accounts := Accounts} = State) ->
+    case maps:get(Pid, Pids, 'undefined') of
+        #{account_id := AccountId, job_id := JobId} ->
+            case maps:get(AccountId, Accounts, 'undefined') of
+                #{jobs := #{JobId := #{ref := Ref, raft := Index} = Job} = Jobs} = Account ->
                     Entry = #{error => Error
                              ,node => node(Pid)
                              ,pid => Pid
@@ -99,21 +95,19 @@ apply(#{index := RaftIdx}, {down, Pid, Error}, #{pids := Pids, accounts := Accou
                     lager:debug("job ~s (~p) for account ~s terminate with error ~p, starting the worker again"
                                ,[JobId, Pid, AccountId, Error]
                                ),
-                    Hst = maps:get(history, Job, #{}),
+                    Hst = maps:get('history', Job, #{}),
                     History = Hst#{RaftIdx => Entry},
-                    NewJob = maps:without([pid], Job),
-                    {State#{pids => maps:without([Pid], Pids)
-                           ,accounts => Accounts#{AccountId => Account#{jobs => Jobs#{JobId => NewJob#{history => History
-                                                                                                      ,raft => RaftIdx
-                                                                                                      }
-                                                                                     }
-                                                                       }
-                                                 }
-                           }
-                    ,ok
-                    ,[{mod_call, ?MODULE, start_worker, [AccountId, JobId, Ref]}]
-                    };
-                _Other -> {State, {error, not_found}}
+                    NewJob = maps:without(['pid'], Job),
+                    NewJobs = Jobs#{JobId => NewJob#{history => History
+                                                    ,raft => RaftIdx
+                                                    }
+                                   },
+                    NewState = State#{pids => maps:without([Pid], Pids)
+                                     ,accounts => Accounts#{AccountId => Account#{jobs => NewJobs}}
+                                     },
+                    Effects = [{'mod_call', ?MODULE, 'start_worker', [AccountId, JobId, Ref]}],
+                    {NewState, 'ok', Effects};
+                _Other -> {State, {'error', 'not_found'}}
             end;
 
         _ -> {State, ok}
@@ -127,123 +121,108 @@ apply(#{index := RaftIdx}
         #{AccountId := #{jobs := #{JobId := #{ref := Ref}} = Jobs} = Account} ->
             lager:debug("removing job ~s with account ~s", [JobId, AccountId]),
             NewState = State#{accounts => Accounts#{AccountId => Account#{jobs => maps:without([JobId], Jobs)}}},
-            {NewState, ok,[{release_cursor, RaftIdx, NewState}]};
+            {NewState, 'ok',[{'release_cursor', RaftIdx, NewState}]};
         _Else ->
-            {State, {error, not_found}}
+            {State, {'error', 'not_found'}}
     end;
 
 apply(#{index := RaftIdx}
      ,{'restart_job', {AccountId, JobId, Ref, NewRef}}
      ,#{accounts := Accounts} = State
      ) ->
-    case Accounts of
-        #{AccountId := #{jobs := #{JobId := #{ref := Ref} = Job} = Jobs} = Account} ->
-            Entry = #{restarted => true
+    case maps:get(AccountId, Accounts, 'undefined') of
+        #{jobs := #{JobId := #{ref := Ref} = Job} = Jobs} = Account ->
+            Entry = #{restarted => 'true'
                      ,raft => RaftIdx
                      },
-            lager:debug("restarting the job ~s for account ~s"
-                       ,[JobId, AccountId]
-                       ),
-            Hst = maps:get(history, Job, #{}),
+            lager:debug("restarting the job ~s for account ~s", [JobId, AccountId]),
+            Hst = maps:get('history', Job, #{}),
             History = Hst#{Ref => Entry},
-            NewState = State#{accounts => Accounts#{AccountId => Account#{jobs => Jobs#{JobId => Job#{history => History
-                                                                                                     ,ref => NewRef
-                                                                                                     }
-                                                                                       }
-                                                                         }
-                                                   }
-                             },
-            {NewState, ok, [{mod_call, ?MODULE, 'start_worker', [AccountId, JobId, NewRef]}]};
+            NewJobs = Jobs#{JobId => Job#{history => History
+                                         ,ref => NewRef
+                                         }
+                           },
+            NewState = State#{accounts => Accounts#{AccountId => Account#{jobs => NewJobs}}},
+            Effects = [{'mod_call', ?MODULE, 'start_worker', [AccountId, JobId, NewRef]}],
+            {NewState, 'ok', Effects};
         _Else ->
-            {State, {error, not_found}}
+            {State, {'error', 'not_found'}}
     end;
 
 apply(#{index := RaftIdx}
      ,{'start_worker_result', {AccountId, JobId, Ref, Node, {ok, Pid}}}
      ,#{pids := Pids, accounts := Accounts} = State
      ) ->
-    case Accounts of
-        #{AccountId := #{jobs := #{JobId := #{ref := Ref} = Job} = Jobs} = Account} ->
+    case maps:get(AccountId, Accounts, 'undefined') of
+        #{jobs := #{JobId := #{ref := Ref} = Job} = Jobs} = Account ->
             lager:debug("started job ~s for account ~s with pid ~p", [JobId, AccountId, Pid]),
-            {State#{accounts => Accounts#{AccountId => Account#{jobs => Jobs#{JobId => Job#{pid => Pid
-                                                                                           ,node => Node
-                                                                                           }
-                                                                             }
-                                                               }
+            NewJobs = Jobs#{JobId => Job#{pid => Pid
+                                         ,node => Node
                                          }
-                   ,pids => Pids#{Pid => #{account_id => AccountId
-                                          ,job_id => JobId
-                                          ,ref => Ref
-                                          ,node => Node
-                                          ,index => RaftIdx
-                                          }
-                                 }
-                   }
-            ,ok
-            ,[{monitor, process, Pid}]
-            };
+                           },
+            NewPids = Pids#{Pid => #{account_id => AccountId
+                                    ,job_id => JobId
+                                    ,ref => Ref
+                                    ,node => Node
+                                    ,index => RaftIdx
+                                    }
+                           },
+            NewState = State#{accounts => Accounts#{AccountId => Account#{jobs => NewJobs}}
+                             ,pids => NewPids
+                             },
+            Effects = [{'monitor', 'process', Pid}],
+            {NewState, 'ok', Effects};
         _Else ->
-            {State, {error, not_found}}
+            {State, {'error', 'not_found'}}
     end;
 
 apply(#{index := RaftIdx}
      ,{'start_worker_result', {AccountId, JobId, Ref, Node, Error}}
      ,#{accounts := Accounts} = State
      ) ->
-    case Accounts of
-        #{AccountId := #{jobs := #{JobId := #{ref := Ref, raft := Index} = Job} = Jobs} = Account} ->
+    case maps:get(AccountId, Accounts, 'undefined') of
+        #{jobs := #{JobId := #{ref := Ref, raft := Index} = Job} = Jobs} = Account ->
             lager:debug("failed to start job ~s for account, trying to start it again: ~p", [JobId, AccountId, Error]),
             Entry = #{error => Error
                      ,node => Node
                      ,raft => Index
                      ,ref => Ref
                      },
-            Hst = maps:get(history, Job, #{}),
+            Hst = maps:get('history', Job, #{}),
             History = Hst#{RaftIdx => Entry},
-            {State#{accounts => Accounts#{AccountId => Account#{jobs => Jobs#{JobId => Job#{history => History
-                                                                                           ,raft => RaftIdx
-                                                                                           }
-                                                                             }
-                                                               }
+            NewJobs = Jobs#{JobId => Job#{history => History
+                                         ,raft => RaftIdx
                                          }
-                   }
-            ,ok
-            ,[{mod_call, ?MODULE, start_worker, [AccountId, JobId, Ref]}]
-            };
+                           },
+            Effects = [{'mod_call', ?MODULE, 'start_worker', [AccountId, JobId, Ref]}],
+            {State#{accounts => Accounts#{AccountId => Account#{jobs => NewJobs}}}, 'ok', Effects};
         _Else ->
-            {State, {error, not_found}}
+            {State, {'error', 'not_found'}}
     end;
 
 apply(#{index := RaftIdx}
      ,{'start_worker', {AccountId, JobId, Ref}}
      ,#{accounts := Accounts} = State
      ) ->
-    case Accounts of
-        #{AccountId := #{jobs := #{JobId := P}}} ->
+    case maps:get(AccountId, Accounts, 'undefined') of
+        #{jobs := #{JobId := P}} ->
             {State, {'error', {'exists', P}}};
-        #{AccountId := #{limit := Limit
-                        ,jobs := #{} = Jobs
-                        } = Account
-         } when Limit > map_size(Jobs) ->
-            {State#{accounts => maps:update(AccountId, Account#{jobs => Jobs#{JobId => #{ref => Ref
-                                                                                        ,raft => RaftIdx
-                                                                                        }}}, Accounts)}
-            ,'ok'
-            ,[{'mod_call', ?MODULE, 'start_worker', [AccountId, JobId, Ref]}]
-            };
-        #{AccountId := #{limit := Limit}} ->
+        #{limit := Limit, jobs := #{} = Jobs} = Account
+          when Limit > map_size(Jobs) ->
+            NewJobs = Jobs#{JobId => #{ref => Ref
+                                      ,raft => RaftIdx
+                                      }
+                           },
+            Effects = [{'mod_call', ?MODULE, 'start_worker', [AccountId, JobId, Ref]}],
+            {State#{accounts => maps:update(AccountId, Account#{jobs => NewJobs}, Accounts)}, 'ok', Effects};
+        #{limit := Limit} ->
             {State#{}, {'error', {'limit', Limit}}};
         _NoAccount ->
-            {State#{accounts => Accounts#{AccountId => #{jobs => #{JobId => #{ref => Ref
-                                                                             ,raft => RaftIdx
-                                                                             }}
-                                                        ,limit => ?DEFAULT_LIMITS(AccountId)
-                                                        }
-                                         }
-                   }
-            ,'ok'
-            ,[{'mod_call', ?MODULE, 'start_worker', [AccountId, JobId, Ref]}]
-            }
+            Account = #{jobs => #{JobId => #{ref => Ref, raft => RaftIdx}}
+                       ,limit => ?DEFAULT_LIMITS(AccountId)
+                       },
+            Effects = [{'mod_call', ?MODULE, 'start_worker', [AccountId, JobId, Ref]}],
+            {State#{accounts => Accounts#{AccountId => Account}}, 'ok', Effects}
     end;
 
 apply(_Meta, _Msg, State) ->
