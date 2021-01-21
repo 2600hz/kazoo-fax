@@ -1,5 +1,5 @@
 %%%-----------------------------------------------------------------------------
-%%% @copyright (C) 2012-2020, 2600Hz
+%%% @copyright (C) 2012-2021, 2600Hz
 %%% @doc
 %%% @author Luis Azedo
 %%%
@@ -65,6 +65,7 @@ apply(#{index := RaftIdx}, {down, Pid, normal}, #{pids := Pids, accounts := Acco
         #{Pid := #{account_id := AccountId
                   ,job_id := JobId
                   }} ->
+            lager:debug("job ~s (~p) for account ~s has been finished", [JobId, Pid, AccountId]),
             Account = maps:get(AccountId, Accounts, #{jobs => #{}}),
             Jobs = maps:without([JobId], maps:get(jobs, Account, #{})),
             State = case maps:size(Jobs) of
@@ -95,6 +96,9 @@ apply(#{index := RaftIdx}, {down, Pid, Error}, #{pids := Pids, accounts := Accou
                              ,ref => Ref
                              ,raft => Index
                              },
+                    lager:debug("job ~s (~p) for account ~s terminate with error ~p, starting the worker again"
+                               ,[JobId, Pid, AccountId, Error]
+                               ),
                     Hst = maps:get(history, Job, #{}),
                     History = Hst#{RaftIdx => Entry},
                     NewJob = maps:without([pid], Job),
@@ -121,6 +125,7 @@ apply(#{index := RaftIdx}
      ) ->
     case Accounts of
         #{AccountId := #{jobs := #{JobId := #{ref := Ref}} = Jobs} = Account} ->
+            lager:debug("removing job ~s with account ~s", [JobId, AccountId]),
             NewState = State#{accounts => Accounts#{AccountId => Account#{jobs => maps:without([JobId], Jobs)}}},
             {NewState, ok,[{release_cursor, RaftIdx, NewState}]};
         _Else ->
@@ -136,6 +141,9 @@ apply(#{index := RaftIdx}
             Entry = #{restarted => true
                      ,raft => RaftIdx
                      },
+            lager:debug("restarting the job ~s for account ~s"
+                       ,[JobId, AccountId]
+                       ),
             Hst = maps:get(history, Job, #{}),
             History = Hst#{Ref => Entry},
             NewState = State#{accounts => Accounts#{AccountId => Account#{jobs => Jobs#{JobId => Job#{history => History
@@ -156,6 +164,7 @@ apply(#{index := RaftIdx}
      ) ->
     case Accounts of
         #{AccountId := #{jobs := #{JobId := #{ref := Ref} = Job} = Jobs} = Account} ->
+            lager:debug("started job ~s for account ~s with pid ~p", [JobId, AccountId, Pid]),
             {State#{accounts => Accounts#{AccountId => Account#{jobs => Jobs#{JobId => Job#{pid => Pid
                                                                                            ,node => Node
                                                                                            }
@@ -183,6 +192,7 @@ apply(#{index := RaftIdx}
      ) ->
     case Accounts of
         #{AccountId := #{jobs := #{JobId := #{ref := Ref, raft := Index} = Job} = Jobs} = Account} ->
+            lager:debug("failed to start job ~s for account, trying to start it again: ~p", [JobId, AccountId, Error]),
             Entry = #{error => Error
                      ,node => Node
                      ,raft => Index
@@ -275,17 +285,18 @@ pending_accounts() ->
         {'error', _Reason} -> []
     end.
 
--spec process_accounts() -> any().
+-spec process_accounts() -> 'ok'.
 process_accounts() ->
     AccountIds = pending_accounts(),
     process_accounts(AccountIds).
 
--spec process_accounts(kz_term:ne_binaries()) -> any().
+-spec process_accounts(kz_term:ne_binaries()) -> 'ok'.
 process_accounts([]) -> 'ok';
 process_accounts(AccountIds) ->
-    [process_account(AccountId) || AccountId <- AccountIds].
+    _ = [process_account(AccountId) || AccountId <- AccountIds],
+    'ok'.
 
--spec process_account(kz_term:ne_binary()) -> any().
+-spec process_account(kz_term:ne_binary()) -> 'ok'.
 process_account(AccountId) ->
     Upto = kz_time:now_s(),
     ViewOptions = [{'limit', ?DEFAULT_LIMITS(AccountId)}
@@ -295,15 +306,66 @@ process_account(AccountId) ->
     case kz_datamgr:get_result_ids(?KZ_FAXES_DB, <<"faxes/jobs_by_account">>, ViewOptions) of
         {'ok', []} -> 'ok';
         {'ok', JobIds} ->
-            Options = [{'should_create', 'false'}
-                      ,{'update', [{<<"pvt_job_status">>, <<"locked">>}]}
-                      ],
-            _LockResults = [kz_datamgr:update_doc(?KZ_FAXES_DB, JobId, Options) || JobId <- JobIds],
-            _Results = [ra:process_command(ra_name(), {'start_worker', {AccountId, JobId, make_ref()}}) || JobId <- JobIds],
-            'ok';
+            start_processing_account(AccountId, JobIds);
         {'error', _Reason} -> 'ok'
     end.
 
+-spec start_processing_account(kz_term:ne_binary(), kz_term:ne_binaries()) -> 'ok'.
+start_processing_account(AccountId, JobIds) ->
+    lager:debug("found ~b jobs for account ~s, locking the jobs and start workers", [length(JobIds), AccountId]),
+    LockedJobs = lock_jobs(AccountId, JobIds),
+    Failed = lists:foldl(fun(JobId, Acc) -> start_account_worker(AccountId, JobId, Acc) end, [], LockedJobs),
+    maybe_rollback_to_pending(AccountId, Failed).
+
+-spec start_account_worker(kz_term:ne_binary(), kz_term:ne_binary(), kz_term:ne_binaries()) -> kz_term:ne_binaries().
+start_account_worker(AccountId, JobId, Acc) ->
+    case ra:process_command(ra_name(), {'start_worker', {AccountId, JobId, make_ref()}}) of
+        {'ok', {'error', Error}, _ServerId} -> %% {limit, Limit} or {'exists', P}
+            lager:debug("failed to start job ~s: ~p", [JobId, Error]),
+            [JobId | Acc];
+        {'ok', _Ok, _ServerId} ->
+            Acc;
+        {'error', _Reason} ->
+            lager:debug("failed to start job ~s: ~p", [JobId, _Reason]),
+            [JobId | Acc];
+        {'timeout', _ServerId} ->
+            lager:debug("timeout to start job ~s", [JobId]),
+            [JobId | Acc]
+    end.
+
+-spec lock_jobs(kz_term:ne_binary(), kz_term:ne_binaries()) -> kz_term:ne_binaries().
+lock_jobs(AccountId, JobIds) ->
+    LockedJobs = lists:foldl(fun(JobId, Acc) -> update_job_state(JobId, <<"locked">>, Acc) end, [], JobIds),
+    lager:debug("locked ~b pending jobs for account ~s", [length(LockedJobs), AccountId]),
+    LockedJobs.
+
+-spec maybe_rollback_to_pending(kz_term:ne_binary(), kz_term:ne_binaries()) -> kz_term:ne_binaries().
+maybe_rollback_to_pending(_, []) ->
+    'ok';
+maybe_rollback_to_pending(AccountId, JobIds) ->
+    lager:debug("failed to ~b jobs start worker for account ~s, rolling back to pending", [length(JobIds), AccountId]),
+    case lists:foldl(fun(JobId, Acc) -> update_job_state(JobId, <<"pending">>, Acc) end, [], JobIds) of
+        [] -> 'ok';
+        Failed ->
+            lager:error("failed to rollback to pending: ~s", [kz_binary:join(Failed)])
+    end.
+
+-spec update_job_state(kz_term:ne_binary(), kz_term:ne_binary(), kz_term:ne_binaries()) -> kz_term:ne_binaries().
+update_job_state(JobId, State, Acc) ->
+    Options = [{'should_create', 'false'}
+              ,{'ensure_saved', 'true'}
+              ,{'update', [{<<"pvt_job_status">>, State}
+                          ,{<<"pvt_modified">>, kz_time:now_s()}
+                          ]
+               }
+              ],
+    case kz_datamgr:update_doc(?KZ_FAXES_DB, JobId, Options) of
+        {'ok', _} ->
+            [JobId | Acc];
+        {'error', _Reason} ->
+            lager:debug("failed to lock job ~s: ~p", [JobId, _Reason]),
+            Acc
+    end.
 
 cluster_name() -> <<"faxes">>.
 
@@ -423,6 +485,7 @@ start_worker(AccountId, JobId, Ref) ->
     kz_process:spawn(fun start_worker/1 , [{AccountId, JobId, Ref}]).
 
 start_worker({AccountId, JobId, Ref}) ->
+    lager:debug("starting worker for job ~s (account id: ~s)", [JobId, AccountId]),
     Node = rand_node(),
     Reply = rpc:call(Node, 'fax_worker_sup', 'start_fax_job', [AccountId, JobId]),
     ra:process_command(id(), {'start_worker_result', {AccountId, JobId, Ref, Node, Reply}}).
