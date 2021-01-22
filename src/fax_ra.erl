@@ -112,7 +112,7 @@ apply(#{index := _RaftIdx}, {'job_info', AccountId, JobId}, State) ->
 apply(#{index := RaftIdx}, {'down', Pid, 'normal'}, #{pids := Pids, accounts := Accounts} = State0) ->
     case maps:get(Pid, Pids, 'undefined') of
         #{account_id := AccountId, job_id := JobId} ->
-            lager:debug("job ~s (~p) for account ~s has been finished", [JobId, Pid, AccountId]),
+            lager:debug("job ~s (~p) ~s has been finished", [JobId, Pid]),
             Account = maps:get(AccountId, Accounts, #{jobs => #{}}),
             Jobs = maps:without([JobId], maps:get('jobs', Account, #{})),
             State = case maps:size(Jobs) of
@@ -141,8 +141,8 @@ apply(#{index := RaftIdx}, {'down', Pid, Error}, #{pids := Pids, accounts := Acc
                              ,ref => Ref
                              ,raft => Index
                              },
-                    lager:debug("job ~s (~p) for account ~s terminate with error ~p, starting the worker again"
-                               ,[JobId, Pid, AccountId, Error]
+                    lager:debug("job ~s (~p) terminate with error '~p', starting the worker again"
+                               ,[JobId, Pid, Error]
                                ),
                     Hst = maps:get('history', Job, #{}),
                     History = Hst#{RaftIdx => Entry},
@@ -188,7 +188,7 @@ apply(#{index := RaftIdx}
             Entry = #{restarted => 'true'
                      ,raft => RaftIdx
                      },
-            lager:debug("restarting the job ~s for account ~s", [JobId, AccountId]),
+            lager:debug("restarting the job ~s", [JobId]),
             Hst = maps:get('history', Job, #{}),
             History = Hst#{Ref => Entry},
             NewJobs = Jobs#{JobId => Job#{history => History
@@ -209,7 +209,7 @@ apply(#{index := RaftIdx}
      ) ->
     case maps:get(AccountId, Accounts, 'undefined') of
         #{jobs := #{JobId := #{ref := Ref} = Job} = Jobs} = Account ->
-            lager:debug("started job ~s for account ~s with pid ~p", [JobId, AccountId, Pid]),
+            lager:debug("started job ~s with pid ~p", [JobId, Pid]),
             NewJobs = Jobs#{JobId => Job#{pid => Pid
                                          ,node => Node
                                          }
@@ -236,7 +236,7 @@ apply(#{index := RaftIdx}
      ) ->
     case maps:get(AccountId, Accounts, 'undefined') of
         #{jobs := #{JobId := #{ref := Ref, raft := Index} = Job} = Jobs} = Account ->
-            lager:debug("failed to start job ~s for account, trying to start it again: ~p", [JobId, AccountId, Error]),
+            lager:debug("failed to start job ~s, will try to starting again: ~p", [JobId, Error]),
             Entry = #{error => Error
                      ,node => Node
                      ,raft => Index
