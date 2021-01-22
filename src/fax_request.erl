@@ -33,7 +33,7 @@
 
 -define(SERVER, ?MODULE).
 
--define(POLL_INTERVAL, 5000).
+-define(POLL_INTERVAL, 5 * ?MILLISECONDS_IN_SECOND).
 
 -record(state, {call :: kapps_call:call() | 'undefined'
                ,action = 'receive' :: 'receive' | 'transmit'
@@ -375,7 +375,7 @@ get_faxbox_notify_list(FaxBoxDoc, AccountDb) ->
     EMails = fax_util:notify_email_list(UserEmail, FaxBoxEmails),
     kz_json:set_value([<<"email">>, <<"send_to">>], EMails, kz_json:new()).
 
--spec maybe_update_fax_settings_from_account(state()) -> any().
+-spec maybe_update_fax_settings_from_account(state()) -> state().
 maybe_update_fax_settings_from_account(#state{call=Call}=State) ->
     case kzd_accounts:fetch(kapps_call:account_id(Call)) of
         {'ok', JObj} ->
@@ -387,25 +387,15 @@ maybe_update_fax_settings_from_account(#state{call=Call}=State) ->
     end,
     State.
 
--spec update_fax_settings(kapps_call:call(), kz_json:object()) -> any().
+-spec update_fax_settings(kapps_call:call(), kz_json:object()) -> 'ok'.
 update_fax_settings(Call, JObj) ->
     ChannelVars = build_fax_settings(Call, JObj),
     kapps_call_command:set(kz_json:from_list(ChannelVars), 'undefined', Call).
 
 -spec build_fax_settings(kapps_call:call(), kz_json:object()) -> kz_term:proplist().
 build_fax_settings(Call, JObj) ->
-    [case kz_json:is_true(<<"override_fax_identity">>, JObj, 'true') of
-         'false' ->
-             {<<"Fax-Identity-Number">>, kapps_call:to_user(Call)};
-         'true' ->
-             {<<"Fax-Identity-Number">>, overridden_fax_identity(Call, JObj)}
-     end,
-     case kz_json:is_true(<<"override_callee_number">>, JObj, 'false') of
-         'false' ->
-             {<<"Callee-ID-Number">>, kapps_call:to_user(Call)};
-         'true' ->
-             {<<"Callee-ID-Number">>, overridden_callee_id(Call, JObj)}
-     end
+    [{<<"Fax-Identity-Number">>, fax_identity_number(Call, JObj)}
+    ,{<<"Callee-ID-Number">>, callee_id_number(Call, JObj)}
     ,{<<"Fax-Identity-Name">>, kz_json:get_value(<<"fax_header">>, JObj)}
     ,{<<"Fax-Timezone">>, kzd_fax_box:timezone(JObj)}
     ,{<<"Callee-ID-Name">>, callee_name(JObj)}
@@ -414,6 +404,18 @@ build_fax_settings(Call, JObj) ->
     ,{<<"RTCP-MUX">>, 'false'}
     ,{<<"Origination-Call-ID">>, kapps_call:call_id(Call)}
     ].
+
+callee_id_number(Call, JObj) ->
+    case kz_json:is_true(<<"override_callee_number">>, JObj, 'false') of
+        'false' -> kapps_call:to_user(Call);
+        'true' -> overridden_callee_id(Call, JObj)
+    end.
+
+fax_identity_number(Call, JObj) ->
+    case kz_json:is_true(<<"override_fax_identity">>, JObj, 'true') of
+        'false' -> kapps_call:to_user(Call);
+        'true' -> overridden_fax_identity(Call, JObj)
+    end.
 
 -spec callee_name(kz_json:object()) -> kz_term:ne_binary().
 callee_name(JObj) ->
@@ -448,7 +450,7 @@ end_receive_fax(JObj, #state{call=Call}=State) ->
     end.
 
 -spec end_receive_fax(state()) -> handle_cast_return().
-end_receive_fax(#state{page=Page, fax_result=JObj}=State) when Page =:= 0 ->
+end_receive_fax(#state{page=0, fax_result=JObj}=State) ->
     lager:info("fax status - receive fax failed with 0 pages"),
     Props = [{[<<"Application-Data">>,<<"Fax-Success">>], 'false'}
             ,{[<<"fax_info">>, <<"fax_result_text">>], <<"no pages received">>}
@@ -461,7 +463,7 @@ end_receive_fax(#state{page=Page}=State) ->
     {'noreply', State#state{monitor=store_document(State)}}.
 
 -spec maybe_partially_received(state()) -> handle_cast_return().
-maybe_partially_received(#state{page=Page, fax_result=JObj}=State) when Page =:= 0 ->
+maybe_partially_received(#state{page=0, fax_result=JObj}=State) ->
     lager:info("fax status - receive fax failed"),
     notify_failure(JObj, State),
     {'stop', 'normal', State};

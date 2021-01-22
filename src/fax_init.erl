@@ -38,9 +38,10 @@ start_listener(Workers, Dispatch, Port) ->
                            ,#{'socket_opts' => [{'port', Port}]
                              ,'num_acceptors' => Workers
                              }
-                           ,#{'env' => #{'dispatch' => Dispatch}})
+                           ,#{'env' => #{'dispatch' => Dispatch}}
+                           )
     of
-        {error,eaddrinuse} -> start_listener(Workers, Dispatch, Port+1);
+        {'error', 'eaddrinuse'} -> start_listener(Workers, Dispatch, Port+1);
         _Other -> _Other
     end.
 

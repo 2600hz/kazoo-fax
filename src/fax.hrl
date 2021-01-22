@@ -13,7 +13,7 @@
 
 -define(CACHE_NAME, 'fax_cache').
 -define(FAX_WORKER_POOL, 'fax_worker_pool').
--define(RETRY_SAVE_ATTACHMENT_DELAY, 5000).
+-define(RETRY_SAVE_ATTACHMENT_DELAY, 5 * ?MILLISECONDS_IN_SECOND).
 
 -define(FAX_CHANNEL_DESTROY_PROPS, [<<"Ringing-Seconds">>, <<"Billing-Seconds">>
                                    ,<<"0">>, <<"Duration-Seconds">>
@@ -62,21 +62,22 @@
                                        ,<<"application/vnd.ms-powerpoint">>
                                        ]).
 
--define(DEFAULT_DENIED_CONTENT_TYPES, [kz_json:from_list([{<<"prefix">>, <<"image/">>}])
-                                      ]).
+-define(DEFAULT_DENIED_CONTENT_TYPES, [kz_json:from_list([{<<"prefix">>, <<"image/">>}])]).
 
--define(SMTP_MSG_MAX_SIZE, kapps_config:get_integer(?CONFIG_CAT, <<"smtp_max_msg_size">>, 10485670)).
+-define(SMTP_MSG_MAX_SIZE
+       ,kapps_config:get_integer(?CONFIG_CAT, <<"smtp_max_msg_size">>, 10 * ?BYTES_M)
+       ).
 -define(SMTP_EXTENSIONS, [{"SIZE", kz_term:to_list(?SMTP_MSG_MAX_SIZE)}]).
 -define(SMTP_CALLBACK_OPTIONS, {'callbackoptions', ['extensions', ?SMTP_EXTENSIONS]}).
 -define(SMTP_PORT, kapps_config:get_integer(?CONFIG_CAT, <<"smtp_port">>, 19025)).
-
 
 -define(FAX_OUTBOUND_SERVER(AccountId), <<"fax_outbound_", AccountId/binary>>).
 
 -define(PORT, kapps_config:get_integer(?CONFIG_CAT, <<"port">>, 30950)).
 
 -define(TMP_DIR
-       ,kapps_config:get_binary(?CONFIG_CAT, <<"file_cache_path">>, <<"/tmp/">>)).
+       ,kapps_config:get_binary(?CONFIG_CAT, <<"file_cache_path">>, <<"/tmp/">>)
+       ).
 
 -define(FAX_HRL, 'true').
 -endif.

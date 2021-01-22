@@ -44,7 +44,9 @@
 
 -type state() :: map().
 
--define(DEFAULT_LIMITS(AccountId), kapps_account_config:get_global(AccountId, ?CONFIG_CAT, <<"max_outbound">>, 10)).
+-define(DEFAULT_LIMITS(AccountId)
+       ,kapps_account_config:get_global(AccountId, ?CONFIG_CAT, <<"max_outbound">>, 10)
+       ).
 -define(TICK_INTERVAL, 5 * ?MILLISECONDS_IN_SECOND).
 
 -spec init(map()) -> state().
@@ -60,13 +62,17 @@ init(#{name := Name}) ->
           {state(), Reply :: term(), ra_machine:effects()} |
           {state(), Reply :: term()}.
 
-apply(#{index := RaftIdx}, {down, Pid, normal}, #{pids := Pids, accounts := Accounts} = State0) ->
+apply(#{index := RaftIdx}
+     ,{'down', Pid, 'normal'}
+     ,#{pids := Pids, accounts := Accounts} = State0
+     ) ->
     case Pids of
         #{Pid := #{account_id := AccountId
                   ,job_id := JobId
-                  }} ->
+                  }
+         } ->
             Account = maps:get(AccountId, Accounts, #{jobs => #{}}),
-            Jobs = maps:without([JobId], maps:get(jobs, Account, #{})),
+            Jobs = maps:without([JobId], maps:get('jobs', Account, #{})),
             State = case maps:size(Jobs) of
                         0 -> State0#{pids => maps:without([Pid], Pids)
                                     ,accounts => maps:without([AccountId], Accounts)
@@ -75,14 +81,17 @@ apply(#{index := RaftIdx}, {down, Pid, normal}, #{pids := Pids, accounts := Acco
                                     ,accounts => maps:update(AccountId, Account#{jobs => Jobs}, Accounts)
                                     }
                     end,
-            Effects = [{demonitor, process, Pid}
-                      ,{release_cursor, RaftIdx, State}
+            Effects = [{'demonitor', 'process', Pid}
+                      ,{'release_cursor', RaftIdx, State}
                       ],
-            {State, ok, Effects};
-        _ -> {State0, ok}
+            {State, 'ok', Effects};
+        _ -> {State0, 'ok'}
     end;
 
-apply(#{index := RaftIdx}, {down, Pid, Error}, #{pids := Pids, accounts := Accounts} = State) ->
+apply(#{index := RaftIdx}
+     ,{'down', Pid, Error}
+     ,#{pids := Pids, accounts := Accounts} = State
+     ) ->
     case Pids of
         #{Pid := #{account_id := AccountId
                   ,job_id := JobId
@@ -95,9 +104,9 @@ apply(#{index := RaftIdx}, {down, Pid, Error}, #{pids := Pids, accounts := Accou
                              ,ref => Ref
                              ,raft => Index
                              },
-                    Hst = maps:get(history, Job, #{}),
+                    Hst = maps:get('history', Job, #{}),
                     History = Hst#{RaftIdx => Entry},
-                    NewJob = maps:without([pid], Job),
+                    NewJob = maps:without(['pid'], Job),
                     {State#{pids => maps:without([Pid], Pids)
                            ,accounts => Accounts#{AccountId => Account#{jobs => Jobs#{JobId => NewJob#{history => History
                                                                                                       ,raft => RaftIdx
@@ -106,13 +115,13 @@ apply(#{index := RaftIdx}, {down, Pid, Error}, #{pids := Pids, accounts := Accou
                                                                        }
                                                  }
                            }
-                    ,ok
-                    ,[{mod_call, ?MODULE, start_worker, [AccountId, JobId, Ref]}]
+                    ,'ok'
+                    ,[{'mod_call', ?MODULE, 'start_worker', [AccountId, JobId, Ref]}]
                     };
-                _Other -> {State, {error, not_found}}
+                _Other -> {State, {'error', 'not_found'}}
             end;
 
-        _ -> {State, ok}
+        _ -> {State, 'ok'}
     end;
 
 apply(#{index := RaftIdx}
@@ -122,9 +131,9 @@ apply(#{index := RaftIdx}
     case Accounts of
         #{AccountId := #{jobs := #{JobId := #{ref := Ref}} = Jobs} = Account} ->
             NewState = State#{accounts => Accounts#{AccountId => Account#{jobs => maps:without([JobId], Jobs)}}},
-            {NewState, ok,[{release_cursor, RaftIdx, NewState}]};
+            {NewState, 'ok', [{'release_cursor', RaftIdx, NewState}]};
         _Else ->
-            {State, {error, not_found}}
+            {State, {'error', 'not_found'}}
     end;
 
 apply(#{index := RaftIdx}
@@ -133,48 +142,57 @@ apply(#{index := RaftIdx}
      ) ->
     case Accounts of
         #{AccountId := #{jobs := #{JobId := #{ref := Ref} = Job} = Jobs} = Account} ->
-            Entry = #{restarted => true
+            Entry = #{restarted => 'true'
                      ,raft => RaftIdx
                      },
-            Hst = maps:get(history, Job, #{}),
+            Hst = maps:get('history', Job, #{}),
             History = Hst#{Ref => Entry},
-            NewState = State#{accounts => Accounts#{AccountId => Account#{jobs => Jobs#{JobId => Job#{history => History
-                                                                                                     ,ref => NewRef
-                                                                                                     }
-                                                                                       }
-                                                                         }
-                                                   }
+            NewState = State#{accounts =>
+                                  Accounts#{AccountId =>
+                                                Account#{jobs =>
+                                                             Jobs#{JobId =>
+                                                                       Job#{history => History
+                                                                           ,ref => NewRef
+                                                                           }
+                                                                  }
+                                                        }
+                                           }
                              },
-            {NewState, ok, [{mod_call, ?MODULE, 'start_worker', [AccountId, JobId, NewRef]}]};
+            {NewState, 'ok', [{'mod_call', ?MODULE, 'start_worker', [AccountId, JobId, NewRef]}]};
         _Else ->
-            {State, {error, not_found}}
+            {State, {'error', 'not_found'}}
     end;
 
 apply(#{index := RaftIdx}
-     ,{'start_worker_result', {AccountId, JobId, Ref, Node, {ok, Pid}}}
+     ,{'start_worker_result', {AccountId, JobId, Ref, Node, {'ok', Pid}}}
      ,#{pids := Pids, accounts := Accounts} = State
      ) ->
     case Accounts of
         #{AccountId := #{jobs := #{JobId := #{ref := Ref} = Job} = Jobs} = Account} ->
-            {State#{accounts => Accounts#{AccountId => Account#{jobs => Jobs#{JobId => Job#{pid => Pid
-                                                                                           ,node => Node
-                                                                                           }
-                                                                             }
-                                                               }
-                                         }
-                   ,pids => Pids#{Pid => #{account_id => AccountId
-                                          ,job_id => JobId
-                                          ,ref => Ref
-                                          ,node => Node
-                                          ,index => RaftIdx
-                                          }
+            {State#{accounts =>
+                        Accounts#{AccountId =>
+                                      Account#{jobs =>
+                                                   Jobs#{JobId =>
+                                                             Job#{pid => Pid
+                                                                 ,node => Node
+                                                                 }
+                                                        }
+                                              }
                                  }
+                   ,pids =>
+                        Pids#{Pid => #{account_id => AccountId
+                                      ,job_id => JobId
+                                      ,ref => Ref
+                                      ,node => Node
+                                      ,index => RaftIdx
+                                      }
+                             }
                    }
-            ,ok
-            ,[{monitor, process, Pid}]
+            ,'ok'
+            ,[{'monitor', 'process', Pid}]
             };
         _Else ->
-            {State, {error, not_found}}
+            {State, {'error', 'not_found'}}
     end;
 
 apply(#{index := RaftIdx}
@@ -188,20 +206,24 @@ apply(#{index := RaftIdx}
                      ,raft => Index
                      ,ref => Ref
                      },
-            Hst = maps:get(history, Job, #{}),
+            Hst = maps:get('history', Job, #{}),
             History = Hst#{RaftIdx => Entry},
-            {State#{accounts => Accounts#{AccountId => Account#{jobs => Jobs#{JobId => Job#{history => History
-                                                                                           ,raft => RaftIdx
-                                                                                           }
-                                                                             }
-                                                               }
-                                         }
+            {State#{accounts =>
+                        Accounts#{AccountId =>
+                                      Account#{jobs =>
+                                                   Jobs#{JobId =>
+                                                             Job#{history => History
+                                                                 ,raft => RaftIdx
+                                                                 }
+                                                        }
+                                              }
+                                 }
                    }
-            ,ok
-            ,[{mod_call, ?MODULE, start_worker, [AccountId, JobId, Ref]}]
+            ,'ok'
+            ,[{'mod_call', ?MODULE, 'start_worker', [AccountId, JobId, Ref]}]
             };
         _Else ->
-            {State, {error, not_found}}
+            {State, {'error', 'not_found'}}
     end;
 
 apply(#{index := RaftIdx}
@@ -215,21 +237,29 @@ apply(#{index := RaftIdx}
                         ,jobs := #{} = Jobs
                         } = Account
          } when Limit > map_size(Jobs) ->
-            {State#{accounts => maps:update(AccountId, Account#{jobs => Jobs#{JobId => #{ref => Ref
-                                                                                        ,raft => RaftIdx
-                                                                                        }}}, Accounts)}
+            {State#{accounts => maps:update(AccountId
+                                           ,Account#{jobs =>
+                                                         Jobs#{JobId => #{ref => Ref
+                                                                         ,raft => RaftIdx
+                                                                         }}}
+                                           ,Accounts
+                                           )
+                   }
             ,'ok'
             ,[{'mod_call', ?MODULE, 'start_worker', [AccountId, JobId, Ref]}]
             };
         #{AccountId := #{limit := Limit}} ->
             {State#{}, {'error', {'limit', Limit}}};
         _NoAccount ->
-            {State#{accounts => Accounts#{AccountId => #{jobs => #{JobId => #{ref => Ref
-                                                                             ,raft => RaftIdx
-                                                                             }}
-                                                        ,limit => ?DEFAULT_LIMITS(AccountId)
-                                                        }
-                                         }
+            {State#{accounts =>
+                        Accounts#{AccountId =>
+                                      #{jobs => #{JobId =>
+                                                      #{ref => Ref
+                                                       ,raft => RaftIdx
+                                                       }}
+                                       ,limit => ?DEFAULT_LIMITS(AccountId)
+                                       }
+                                 }
                    }
             ,'ok'
             ,[{'mod_call', ?MODULE, 'start_worker', [AccountId, JobId, Ref]}]
@@ -275,17 +305,16 @@ pending_accounts() ->
         {'error', _Reason} -> []
     end.
 
--spec process_accounts() -> any().
+-spec process_accounts() -> 'ok'.
 process_accounts() ->
     AccountIds = pending_accounts(),
     process_accounts(AccountIds).
 
--spec process_accounts(kz_term:ne_binaries()) -> any().
-process_accounts([]) -> 'ok';
+-spec process_accounts(kz_term:ne_binaries()) -> 'ok'.
 process_accounts(AccountIds) ->
-    [process_account(AccountId) || AccountId <- AccountIds].
+    lists:foreach(fun process_account/1, AccountIds).
 
--spec process_account(kz_term:ne_binary()) -> any().
+-spec process_account(kz_term:ne_binary()) -> 'ok'.
 process_account(AccountId) ->
     Upto = kz_time:now_s(),
     ViewOptions = [{'limit', ?DEFAULT_LIMITS(AccountId)}
@@ -294,38 +323,46 @@ process_account(AccountId) ->
                   ],
     case kz_datamgr:get_result_ids(?KZ_FAXES_DB, <<"faxes/jobs_by_account">>, ViewOptions) of
         {'ok', []} -> 'ok';
-        {'ok', JobIds} ->
-            Options = [{'should_create', 'false'}
-                      ,{'update', [{<<"pvt_job_status">>, <<"locked">>}]}
-                      ],
-            _LockResults = [kz_datamgr:update_doc(?KZ_FAXES_DB, JobId, Options) || JobId <- JobIds],
-            _Results = [ra:process_command(ra_name(), {'start_worker', {AccountId, JobId, make_ref()}}) || JobId <- JobIds],
-            'ok';
+        {'ok', JobIds} -> process_account_jobs(AccountId, JobIds);
         {'error', _Reason} -> 'ok'
     end.
 
+process_account_jobs(AccountId, JobIds) ->
+    Options = [{'should_create', 'false'}
+              ,{'update', [{<<"pvt_job_status">>, <<"locked">>}]}
+              ],
+    RaName = ra_name(),
+    lists:foreach(fun(JobId) ->
+                          process_account_job(AccountId, JobId, Options, RaName)
+                  end
+                 ,JobIds
+                 ).
+
+process_account_job(AccountId, JobId, Options, RaName) ->
+    _ = kz_datamgr:update_doc(?KZ_FAXES_DB, JobId, Options),
+    ra:process_command(RaName, {'start_worker', {AccountId, JobId, make_ref()}}).
 
 cluster_name() -> <<"faxes">>.
 
--spec ra_name() -> atom().
+-spec ra_name() -> 'fax'.
 ra_name() -> 'fax'.
 
 -spec ra_name(non_neg_integer()) -> atom().
 ra_name(0) -> ra_name();
 ra_name(I) -> kz_term:to_atom(io_lib:format("~s~B", [ra_name(), I]), 'true').
 
--spec id() -> tuple().
+-spec id() -> {'fax', node()}.
 id() -> {ra_name(), node()}.
 
--spec id(non_neg_integer()) -> tuple().
+-spec id(non_neg_integer()) -> {atom(), node()}.
 id(0) -> {ra_name(), node()};
 id(I) -> {ra_name(I), node()}.
 
--spec members() -> any().
+-spec members() -> [{'fax', node()}].
 members() ->
     [{ra_name(), N} || N <- [node() | app_nodes()]].
 
--spec members(non_neg_integer()) -> any().
+-spec members(non_neg_integer()) -> [{atom(), node()}].
 members(I) ->
     [{ra_name(X), N} || N <- [node() | app_nodes()],
                         X <- lists:seq(0, I)
@@ -336,7 +373,7 @@ ra_machine() ->
 
 ra_machine_config() -> #{}.
 
--spec make_ra_conf(any()) -> any().
+-spec make_ra_conf({atom(), node()}) -> map().
 make_ra_conf(ServerId) ->
     ClusterName = cluster_name(),
     Members = members(),
@@ -356,22 +393,18 @@ app_nodes() ->
     {Replies, Bad} = rpc:multicall(Nodes, 'kapps_controller', 'list_apps', []),
     [Node || {Node, Apps} <- lists:zip(Nodes -- Bad, Replies), lists:member(?APP, Apps)].
 
-
--spec restart() -> any().
+-spec restart() -> boolean().
 restart() ->
     Name = id(),
     case ra:restart_server(Name) of
-        'ok' ->
-            'ok';
-        {'error', Err1}
-          when Err1 == 'not_started'
-               orelse Err1 == 'name_not_registered' ->
-            'false';
+        'ok' -> 'true';
+        {'error', {'already_started', _}} -> 'true';
 
-        {'error', {'already_started', _}} ->
-            'ok';
+        {'error', 'not_started'} -> 'false';
+        {'error', 'name_not_registered'} -> 'false';
         Err ->
-            lager:warning("recover: ra ~w could not be restarted ~w", [Name, Err])
+            lager:warning("recover: ra ~w could not be restarted ~w", [Name, Err]),
+            'false'
     end.
 
 -spec start() -> any().
@@ -389,24 +422,30 @@ maybe_join() ->
         _ -> join()
     end.
 
--spec join() -> any().
+-spec join() -> 'ok' | {'error', any()}.
 join() ->
     RaConf = make_ra_conf(id()),
     case ra:start_server(RaConf) of
-        'ok' ->
-            case ra:add_member(members(), id()) of
-                {'ok', _, _Leader} -> 'ok';
-                Else -> Else
-            end;
+        'ok' -> join_add_member();
         Else -> Else
     end.
 
--spec delete() -> any().
+join_add_member() ->
+    case ra:add_member(members(), id()) of
+        {'ok', _, _Leader} -> 'ok';
+        Else -> Else
+    end.
+
+%% lifted from ra/src/ra.hrl
+-type ra_server_id() :: atom() | {Name :: atom(), Node :: node()}.
+
+-spec delete() ->
+          {'ok', ra_server_id()} | {'error', term()}.
 delete() ->
     {'ok', Members, _Leader} = ra:members(ra_name()),
     ra:delete_cluster(Members).
 
--spec start_new() -> any().
+-spec start_new() -> 'ok' | {'error', 'cluster_not_formed'}.
 start_new() ->
     RaConfs = [make_ra_conf(ServerId) || ServerId <- members()],
     case ra:start_cluster(RaConfs) of
@@ -414,7 +453,7 @@ start_new() ->
         Else -> Else
     end.
 
--spec stop() -> any().
+-spec stop() -> 'ok' | {'error', 'nodedown'}.
 stop() ->
     ra:stop_server(id()).
 
@@ -427,7 +466,7 @@ start_worker({AccountId, JobId, Ref}) ->
     Reply = rpc:call(Node, 'fax_worker_sup', 'start_fax_job', [AccountId, JobId]),
     ra:process_command(id(), {'start_worker_result', {AccountId, JobId, Ref, Node, Reply}}).
 
--spec available_nodes() -> list().
+-spec available_nodes() -> [node()].
 available_nodes() ->
     {'ok', Members, _Leader} = ra:members(ra_name()),
     lists:usort([Node || {_, Node} <- Members, lists:member(Node, nodes())]).
