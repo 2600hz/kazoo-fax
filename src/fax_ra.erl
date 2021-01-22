@@ -148,7 +148,10 @@ apply(#{index := _RaftIdx}
         _ ->
             {State, {'error', 'not_found'}}
     end;
-apply(#{index := _RaftIdx}, {'job_info', AccountId, JobId}, State) ->
+apply(#{index := _RaftIdx}
+     ,{'job_info', AccountId, JobId}
+     ,State
+     ) ->
     kz_log:put_callid(JobId),
     case get_account_job_from_state(AccountId, JobId, State) of
         {'ok', {_, Job}} ->
@@ -574,10 +577,8 @@ process_accounts() ->
     process_accounts(AccountIds).
 
 -spec process_accounts(kz_term:ne_binaries()) -> 'ok'.
-process_accounts([]) -> 'ok';
 process_accounts(AccountIds) ->
-    _ = [process_account(AccountId) || AccountId <- AccountIds],
-    'ok'.
+    lists:foreach(fun process_account/1, AccountIds).
 
 -spec process_account(kz_term:ne_binary()) -> 'ok'.
 process_account(AccountId) ->
@@ -652,25 +653,25 @@ update_job_state(JobId, State, Acc) ->
 
 cluster_name() -> <<"faxes">>.
 
--spec ra_name() -> atom().
+-spec ra_name() -> 'fax'.
 ra_name() -> 'fax'.
 
 -spec ra_name(non_neg_integer()) -> atom().
 ra_name(0) -> ra_name();
 ra_name(I) -> kz_term:to_atom(io_lib:format("~s~B", [ra_name(), I]), 'true').
 
--spec id() -> tuple().
+-spec id() -> {atom(), node()}.
 id() -> {ra_name(), node()}.
 
--spec id(non_neg_integer()) -> tuple().
+-spec id(non_neg_integer()) -> {atom(), node()}.
 id(0) -> {ra_name(), node()};
 id(I) -> {ra_name(I), node()}.
 
--spec members() -> any().
+-spec members() -> [{'fax', node()}].
 members() ->
     [{ra_name(), N} || N <- [node() | app_nodes()]].
 
--spec members(non_neg_integer()) -> any().
+-spec members(non_neg_integer()) -> [{'fax', node()}].
 members(I) ->
     [{ra_name(X), N} || N <- [node() | app_nodes()],
                         X <- lists:seq(0, I)
@@ -681,7 +682,7 @@ ra_machine() ->
 
 ra_machine_config() -> #{}.
 
--spec make_ra_conf(any()) -> any().
+-spec make_ra_conf({atom(), node()}) -> map().
 make_ra_conf(ServerId) ->
     ClusterName = cluster_name(),
     Members = members(),
@@ -702,21 +703,18 @@ app_nodes() ->
     [Node || {Node, Apps} <- lists:zip(Nodes -- Bad, Replies), lists:member(?APP, Apps)].
 
 
--spec restart() -> any().
+-spec restart() -> boolean().
 restart() ->
     Name = id(),
     case ra:restart_server(Name) of
-        'ok' ->
-            'ok';
-        {'error', Err1}
-          when Err1 == 'not_started'
-               orelse Err1 == 'name_not_registered' ->
-            'false';
+        'ok' -> 'true';
+        {'error', {'already_started', _}} -> 'true';
 
-        {'error', {'already_started', _}} ->
-            'ok';
+        {'error', 'not_started'} -> 'false';
+        {'error', 'name_not_registered'} -> 'false';
         Err ->
-            lager:warning("recover: ra ~w could not be restarted ~w", [Name, Err])
+            lager:warning("recover: ra ~w could not be restarted ~w", [Name, Err]),
+            'false'
     end.
 
 -spec start() -> any().
@@ -734,24 +732,30 @@ maybe_join() ->
         _ -> join()
     end.
 
--spec join() -> any().
+-spec join() -> 'ok' | {'error', any()}.
 join() ->
     RaConf = make_ra_conf(id()),
     case ra:start_server(RaConf) of
-        'ok' ->
-            case ra:add_member(members(), id()) of
-                {'ok', _, _Leader} -> 'ok';
-                Else -> Else
-            end;
+        'ok' -> join_add_member();
         Else -> Else
     end.
 
--spec delete() -> any().
+join_add_member() ->
+    case ra:add_member(members(), id()) of
+        {'ok', _, _Leader} -> 'ok';
+        Else -> Else
+    end.
+
+%% lifted from ra/src/ra.hrl
+-type ra_server_id() :: atom() | {Name :: atom(), Node :: node()}.
+
+-spec delete() ->
+          {'ok', ra_server_id()} | {'error', term()}.
 delete() ->
     {'ok', Members, _Leader} = ra:members(ra_name()),
     ra:delete_cluster(Members).
 
--spec start_new() -> any().
+-spec start_new() -> 'ok' | {'error', 'cluster_not_formed'}.
 start_new() ->
     RaConfs = [make_ra_conf(ServerId) || ServerId <- members()],
     case ra:start_cluster(RaConfs) of
@@ -759,7 +763,7 @@ start_new() ->
         Else -> Else
     end.
 
--spec stop() -> any().
+-spec stop() -> 'ok' | {'error', 'nodedown'}.
 stop() ->
     ra:stop_server(id()).
 
@@ -773,7 +777,7 @@ start_worker({AccountId, JobId, Ref}) ->
     Reply = rpc:call(Node, 'fax_worker_sup', 'start_fax_job', [AccountId, JobId], ?RPC_CALL_TIMEOUT),
     ra:process_command(id(), {'start_worker_result', {AccountId, JobId, Ref, Node, Reply}}).
 
--spec available_nodes() -> list().
+-spec available_nodes() -> [node()].
 available_nodes() ->
     {'ok', Members, _Leader} = ra:members(ra_name()),
     lists:usort([Node || {_, Node} <- Members, lists:member(Node, nodes())]).
