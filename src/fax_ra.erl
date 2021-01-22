@@ -313,6 +313,13 @@ apply(#{index := RaftIdx}
             {State, {'error', 'not_found'}}
     end;
 
+apply(Meta
+     ,{'start_worker_result', {AccountId, JobId, Ref, Node, {'error', {'already_started', Pid}}}}
+     ,State
+     ) ->
+    lager:debug("job ~s is already started with pid ~p", [JobId, Pid]),
+    apply(Meta, {'start_worker_result', {AccountId, JobId, Ref, Node, {'ok', Pid}}}, State);
+
 apply(#{index := RaftIdx}
      ,{'start_worker_result', {AccountId, JobId, Ref, Node, Error}}
      ,#{accounts := Accounts} = State
