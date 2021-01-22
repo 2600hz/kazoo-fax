@@ -141,6 +141,7 @@ apply(#{index := _RaftIdx}, {'account_jobs', AccountId}, State) ->
             {State, {'error', 'not_found'}}
     end;
 apply(#{index := _RaftIdx}, {'job_info', AccountId, JobId}, State) ->
+    kz_log:put_callid(JobId),
     case get_account_job_from_state(AccountId, JobId, State) of
         {'ok', {_, Job}} ->
             {State, {'ok', Job}};
@@ -151,7 +152,8 @@ apply(#{index := _RaftIdx}, {'job_info', AccountId, JobId}, State) ->
 apply(#{index := RaftIdx}, {'down', Pid, 'normal'}, #{pids := Pids, accounts := Accounts} = State0) ->
     case maps:get(Pid, Pids, 'undefined') of
         #{account_id := AccountId, job_id := JobId} ->
-            lager:debug("job ~s with pid ~p terminated normally", [JobId, Pid]),
+            kz_log:put_callid(JobId),
+            lager:debug("job ~p terminated normally", [Pid]),
             Account = maps:get(AccountId, Accounts, #{jobs => #{}}),
             Jobs = maps:without([JobId], maps:get('jobs', Account, #{})),
             State = case maps:size(Jobs) of
@@ -174,14 +176,15 @@ apply(#{index := RaftIdx}, {'down', Pid, Error}, #{pids := Pids, accounts := Acc
         #{account_id := AccountId, job_id := JobId} ->
             case maps:get(AccountId, Accounts, 'undefined') of
                 #{jobs := #{JobId := #{ref := Ref, raft := Index} = Job} = Jobs} = Account ->
+                    kz_log:put_callid(JobId),
                     Entry = #{error => Error
                              ,node => node(Pid)
                              ,pid => Pid
                              ,ref => Ref
                              ,raft => Index
                              },
-                    lager:debug("job ~s with pid ~p terminated with error, try start the worker in ~bms: ~p"
-                               ,[JobId, Pid, ?START_RETRY, Error]
+                    lager:debug("job ~p terminated with error, try start the worker in ~bms: ~p"
+                               ,[Pid, ?START_RETRY, Error]
                                ),
                     Hst = maps:get('history', Job, #{}),
                     History = Hst#{RaftIdx => Entry},
@@ -206,6 +209,7 @@ apply(#{index := RaftIdx}
      ,{'remove_pid', {ForceKill, JobId, Job}}
      ,State0
      ) ->
+    kz_log:put_callid(JobId),
     {NewState, Effects0} = maybe_remove_pid_from_state(ForceKill, JobId, Job, State0),
     Effects = Effects0 ++ [{'release_cursor', RaftIdx, NewState}],
     {'ok', NewState, Effects};
@@ -214,6 +218,7 @@ apply(#{index := RaftIdx}
      ,{'remove_job', {AccountId, JobId, Ref}}
      ,State0
      ) ->
+    kz_log:put_callid(JobId),
     case maybe_remove_job_from_account_state(AccountId, JobId, Ref, State0) of
         {'ok', NewState, Job} ->
             Effects = [{'mod_call', ?MODULE, 'process_command', [{'remove_pid', {'false', JobId, Job}}]}
@@ -228,6 +233,7 @@ apply(#{index := RaftIdx}
      ,{'remove_stale_job', {AccountId, JobId}}
      ,State0
      ) ->
+    kz_log:put_callid(JobId),
     case maybe_remove_job_from_account_state(AccountId, JobId, State0) of
         {'ok', NewState, Job} ->
             Effects = [{'mod_call', ?MODULE, 'process_command', [{'remove_pid', {'false', JobId, Job}}]}
@@ -242,6 +248,7 @@ apply(#{index := RaftIdx}
      ,{'kill_job', {AccountId, JobId}}
      ,State0
      ) ->
+    kz_log:put_callid(JobId),
     case maybe_remove_job_from_account_state(AccountId, JobId, State0) of
         {'ok', NewState, Job} ->
             Effects = [{'mod_call', ?MODULE, 'process_command', [{'remove_pid', {'true', JobId, Job}}]}
@@ -258,7 +265,8 @@ apply(#{index := RaftIdx}
      ) ->
     case maps:get(Pid, Pids, 'undefined') of
         #{account_id := AccountId, job_id := JobId} ->
-            lager:debug("removing pid ~p with job id ~s", [Pid, JobId]),
+            kz_log:put_callid(JobId),
+            lager:debug("removing pid ~p", [Pid]),
             Account = maps:get(AccountId, Accounts, #{jobs => #{}}),
             Jobs = maps:without([JobId], maps:get('jobs', Account, #{})),
             State = case maps:size(Jobs) of
@@ -280,6 +288,7 @@ apply(#{index := RaftIdx}
      ,{'restart_job', {AccountId, JobId, Ref, NewRef}}
      ,#{accounts := Accounts} = State
      ) ->
+    kz_log:put_callid(JobId),
     case maps:get(AccountId, Accounts, 'undefined') of
         #{jobs := #{JobId := #{ref := Ref} = Job} = Jobs} = Account ->
             Entry = #{restarted => 'true'
@@ -305,6 +314,7 @@ apply(#{index := RaftIdx}
      ,{'start_worker_result', {AccountId, JobId, Ref, Node, {'ok', Pid}}}
      ,#{pids := Pids, accounts := Accounts} = State
      ) ->
+    kz_log:put_callid(JobId),
     case maps:get(AccountId, Accounts, 'undefined') of
         #{jobs := #{JobId := #{ref := Ref} = Job} = Jobs} = Account ->
             lager:debug("started job ~s with pid ~p", [JobId, Pid]),
@@ -332,6 +342,7 @@ apply(Meta
      ,{'start_worker_result', {AccountId, JobId, Ref, Node, {'error', {'already_started', Pid}}}}
      ,State
      ) ->
+    kz_log:put_callid(JobId),
     lager:debug("job ~s is already started with pid ~p", [JobId, Pid]),
     apply(Meta, {'start_worker_result', {AccountId, JobId, Ref, Node, {'ok', Pid}}}, State);
 
@@ -339,6 +350,7 @@ apply(#{index := RaftIdx}
      ,{'start_worker_result', {AccountId, JobId, Ref, Node, Error}}
      ,#{accounts := Accounts} = State
      ) ->
+    kz_log:put_callid(JobId),
     case maps:get(AccountId, Accounts, 'undefined') of
         #{jobs := #{JobId := #{ref := Ref, raft := Index} = Job} = Jobs} = Account ->
             lager:debug("failed to start job ~s, will try to starting it again in ~bms: ~p"
@@ -366,6 +378,7 @@ apply(#{index := _RaftIdx}
      ,{'timeout', {'start_retry', {AccountId, JobId, Ref}}}
      ,#{accounts := Accounts} = State
      ) ->
+    kz_log:put_callid(JobId),
     case maps:get(AccountId, Accounts, 'undefined') of
         #{jobs := #{JobId := #{ref := Ref} = Job}} ->
             lager:debug("trying to start job ~s for the ~b time", [JobId, maps:get('retried', Job, 0)]),
@@ -379,6 +392,7 @@ apply(#{index := RaftIdx}
      ,{'start_worker', {AccountId, JobId, Ref}}
      ,#{accounts := Accounts} = State
      ) ->
+    kz_log:put_callid(JobId),
     case maps:get(AccountId, Accounts, 'undefined') of
         #{jobs := #{JobId := P}} ->
             {State, {'error', {'exists', P}}};
@@ -451,34 +465,30 @@ remove_job_from_account_state(AccountId, JobId
 %% @private
 -spec maybe_remove_pid_from_state(boolean(), job_id(), map(), state()) ->
           {state(), ra_machine:effects()}.
-maybe_remove_pid_from_state(ShouldKill, JobId
+maybe_remove_pid_from_state(ShouldKill, _JobId
                            ,#{pid := Pid, node := Node}
                            ,#{pids := Pids}=State
                            ) ->
     case rpc:call(Node, 'erlang', 'is_process_alive', [Pid], ?RPC_CALL_TIMEOUT) of
         'false' ->
-            lager:debug("job ~s pid ~p is not alive, removing it from state"
-                        ,[JobId, Pid]
-                       ),
+            lager:debug("job ~p is not alive, removing it from state", [Pid]),
             {State#{pids => maps:without([Pid], Pids)}, [{'demonitor', 'process', Pid}]};
         'true' when ShouldKill ->
             KillResult = rpc:call(Node, 'supervisor', 'terminate_child', ['fax_worker_sup', Pid]),
-            lager:debug("job ~s pid ~p is still alive on node ~p, force exiting it result in ~p"
-                       ,[JobId, Pid, Node, KillResult]
-                       ),
+            lager:debug("job ~p is still alive, force exiting it result in ~p", [Pid, KillResult]),
             {State, [{'demonitor', 'process', Pid}]};
         'true' ->
-            lager:debug("job ~s pid ~p is still alive on node ~p, not removing pid", [JobId, Pid, Node]),
+            lager:debug("job ~p is still alive, not removing pid", [Pid]),
             {State, []};
-        {'badrpc', Error} when ShouldKill ->
+        {'badrpc', _} when ShouldKill ->
             KillResult = rpc:call(Node, 'supervisor', 'terminate_child', ['fax_worker_sup', Pid]),
-            lager:debug("failed to query job ~s pid ~p aliveness on node ~p, force exiting it result in ~p"
-                        ,[JobId, Pid, Node, Error, KillResult]
+            lager:debug("failed to query job ~p aliveness on node ~p, force exiting it result in ~p"
+                        ,[Pid, Node, KillResult]
                        ),
             {State, [{'demonitor', 'process', Pid}]};
         {'badrpc', Error} ->
-            lager:debug("failed to query job ~s pid ~p aliveness on node ~p, not removing pid: ~p"
-                        ,[JobId, Pid, Node, Error]
+            lager:debug("failed to query job ~p aliveness on node ~p, not removing pid: ~p"
+                        ,[Pid, Node, Error]
                        ),
             {State, []}
     end.
