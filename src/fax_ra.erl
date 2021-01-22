@@ -40,12 +40,47 @@
         ,available_nodes/0
         ]).
 
+
+-export([account_jobs/1
+        ,job_info/2
+        ]).
+
 -include("fax.hrl").
 
 -type state() :: map().
 
+-type job_id() :: kz_term:ne_binary().
+-type account_id() :: kz_term:ne_binary().
+-type start_worker_ret() :: kz_types:startlink_ret() | {'badrpc', any()}.
+
+-type command() :: {'remove_job', {account_id(), job_id(), reference()}} |
+                   {'restart_job', {account_id(), job_id(), OldRef::reference(), NewRef::reference()}} |
+                   {'start_worker', {account_id(), job_id(), reference()}} |
+                   {'start_worker_result', {account_id(), job_id(), reference(), node(), start_worker_ret()}} |
+                   ra_machine:effect().
+
 -define(DEFAULT_LIMITS(AccountId), kapps_account_config:get_global(AccountId, ?CONFIG_CAT, <<"max_outbound">>, 10)).
 -define(TICK_INTERVAL, 5 * ?MILLISECONDS_IN_SECOND).
+
+
+-spec account_jobs(AccountId::kz_term:ne_binary()) ->
+         {'ok', Jobs::map()} |
+         {'error', 'timeout' | 'noproc' | 'not_found'}.
+account_jobs(AccountId) ->
+    process_command({'account_jobs', AccountId}).
+
+-spec job_info(AccountId::kz_term:ne_binary(), JobId::kz_term:ne_binary()) ->
+         {'ok', Job::map()} |
+         {'error', 'timeout' | 'noproc' | 'not_found'}.
+job_info(AccountId, JobId) ->
+    process_command({'job_info', AccountId, JobId}).
+
+process_command(Cmd) ->
+    case ra:process_command(ra_name(), Cmd) of
+        {'timeout', _}=Error -> Error;
+        {'error', 'noproc'}=Error -> Error;
+        Reply -> Reply
+    end.
 
 -spec init(map()) -> state().
 init(#{name := Name}) ->
@@ -56,10 +91,24 @@ init(#{name := Name}) ->
       jobs => #{}
      }.
 
--spec apply(ra_machine:command_meta_data(), term(), state()) ->
+-spec apply(ra_machine:command_meta_data(), command(), state()) ->
           {state(), Reply :: term(), ra_machine:effects()} |
           {state(), Reply :: term()}.
 
+apply(#{index := _RaftIdx}, {'account_jobs', AccountId}, State) ->
+    case find_account_in_state(AccountId, State) of
+        {'ok', #{jobs := Jobs}} ->
+            {State, {'ok', Jobs}};
+        _ ->
+            {State, {'error', 'not_found'}}
+    end;
+apply(#{index := _RaftIdx}, {'job_info', AccountId, JobId}, State) ->
+    case get_account_job_from_state(AccountId, JobId, State) of
+        {'ok', {_, Job}} ->
+            {State, {'ok', Job}};
+        _ ->
+            {State, {'error', 'not_found'}}
+    end;
 apply(#{index := RaftIdx}, {'down', Pid, 'normal'}, #{pids := Pids, accounts := Accounts} = State0) ->
     case maps:get(Pid, Pids, 'undefined') of
         #{account_id := AccountId, job_id := JobId} ->
@@ -114,16 +163,20 @@ apply(#{index := RaftIdx}, {'down', Pid, Error}, #{pids := Pids, accounts := Acc
     end;
 
 apply(#{index := RaftIdx}
-     ,{'remove_job', {AccountId, JobId, Ref}}
-     ,#{accounts := Accounts} = State
+     ,{'remove_job', {AccountId, JobId}}
+     ,State
      ) ->
-    case Accounts of
-        #{AccountId := #{jobs := #{JobId := #{ref := Ref}} = Jobs} = Account} ->
-            lager:debug("removing job ~s with account ~s", [JobId, AccountId]),
-            NewState = State#{accounts => Accounts#{AccountId => Account#{jobs => maps:without([JobId], Jobs)}}},
-            {NewState, 'ok',[{'release_cursor', RaftIdx, NewState}]};
-        _Else ->
-            {State, {'error', 'not_found'}}
+    case maybe_remove_job_from_state(AccountId, JobId, State) of
+        {'ok', NewState} ->
+            Effects = [{'release_cursor', RaftIdx, NewState}],
+            {NewState, 'ok', Effects};
+        {'ok', NewState, Pid} ->
+            Effects = [{'demonitor', 'process', Pid}
+                      ,{'release_cursor', RaftIdx, NewState}
+                      ],
+            {NewState, 'ok', Effects};
+        Error ->
+            {State, Error}
     end;
 
 apply(#{index := RaftIdx}
@@ -142,6 +195,7 @@ apply(#{index := RaftIdx}
                                          ,ref => NewRef
                                          }
                            },
+            %% FIXME: demonitor old pid? remove old pid from state?
             NewState = State#{accounts => Accounts#{AccountId => Account#{jobs => NewJobs}}},
             Effects = [{'mod_call', ?MODULE, 'start_worker', [AccountId, JobId, NewRef]}],
             {NewState, 'ok', Effects};
@@ -150,7 +204,7 @@ apply(#{index := RaftIdx}
     end;
 
 apply(#{index := RaftIdx}
-     ,{'start_worker_result', {AccountId, JobId, Ref, Node, {ok, Pid}}}
+     ,{'start_worker_result', {AccountId, JobId, Ref, Node, {'ok', Pid}}}
      ,#{pids := Pids, accounts := Accounts} = State
      ) ->
     case maps:get(AccountId, Accounts, 'undefined') of
@@ -227,6 +281,60 @@ apply(#{index := RaftIdx}
 
 apply(_Meta, _Msg, State) ->
     {State, 'ok'}.
+
+%% @private
+-spec maybe_account_is_done(AccountId::kz_term:ne_binary(), Account::map(), Accounts::map()) -> Accounts::map().
+maybe_account_is_done(AccountId, #{jobs := Jobs}, Accounts) when map_size(Jobs) =:= 0 ->
+    maps:without([AccountId], Accounts);
+maybe_account_is_done(AccountId, Account, Accounts) ->
+    Accounts#{AccountId => Account}.
+
+%% @private
+-spec maybe_remove_job_from_state(kz_term:ne_binary(), kz_term:ne_binary(), state()) ->
+          {'ok', state()} |
+          {'ok', state(), pid()} |
+          {'error', 'not_found'}.
+maybe_remove_job_from_state(AccountId, JobId, #{accounts := Accounts, pids := Pids} = State) ->
+    case get_account_job_from_state(AccountId, JobId, State) of
+        {'ok', {Account, #{pid := Pid}}} ->
+            lager:debug("removing job ~s", [JobId]),
+            NewJobs = maps:without([JobId], maps:get('jobs', Account, #{})),
+            NewState = State#{accounts => maybe_account_is_done(AccountId, Account#{jobs => NewJobs}, Accounts)},
+            case erlang:is_process_alive(Pid) of
+                'false' ->
+                    {'ok', NewState#{pids => maps:without([Pid], Pids)}, Pid};
+                'true' ->
+                    {'ok', NewState}
+            end;
+        {'ok', {Account, _Job}} ->
+            lager:debug("removing job ~s", [JobId]),
+            NewJobs = maps:without([JobId], maps:get('jobs', Account, #{})),
+            State#{accounts => maybe_account_is_done(AccountId, Account#{jobs => NewJobs}, Accounts)};
+        {'error', 'not_found'} ->
+            {'error', 'not_found'}
+    end.
+
+%% @private
+-spec find_account_in_state(kz_term:ne_binary(), state()) ->
+          {'ok', Account::map()} |
+          {'error', 'not_found'}.
+find_account_in_state(AccountId, #{accounts := Accounts}) ->
+    case maps:get(AccountId, Accounts, 'undefined') of
+        'undefined' -> {'error', 'not_found'};
+        #{} = Account -> {'ok', Account}
+    end.
+
+%% @private
+-spec get_account_job_from_state(kz_term:ne_binary(), kz_term:ne_binary(), state()) ->
+          {'ok', {Account::map(), Job::map()}} |
+          {'error', 'not_found'}.
+get_account_job_from_state(AccountId, JobId, State) ->
+    case find_account_in_state(AccountId, State) of
+        {'ok', #{jobs := #{JobId := Job}} = Account} ->
+            {'ok', {Account, Job}};
+        _ ->
+            {'error', 'not_found'}
+    end.
 
 -spec state_enter(ra_server:ra_state(), state()) -> ra_machine:effects().
 state_enter('leader', #{pids := PMap}) ->
