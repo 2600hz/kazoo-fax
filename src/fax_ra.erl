@@ -46,6 +46,8 @@
         ,remove_stale_job/2
         ,kill_job/2
         ,job_info/2
+
+        ,process_command/1
         ]).
 
 -include("fax.hrl").
@@ -101,6 +103,7 @@ kill_job(AccountId, JobId) ->
     process_command({'kill_job', AccountId, JobId}).
 
 %% @private
+-spec process_command(any()) -> any().
 process_command(Cmd) ->
     process_command(members(), Cmd).
 
@@ -148,7 +151,7 @@ apply(#{index := _RaftIdx}, {'job_info', AccountId, JobId}, State) ->
 apply(#{index := RaftIdx}, {'down', Pid, 'normal'}, #{pids := Pids, accounts := Accounts} = State0) ->
     case maps:get(Pid, Pids, 'undefined') of
         #{account_id := AccountId, job_id := JobId} ->
-            lager:debug("job ~s (~p) ~s has been finished", [JobId, Pid]),
+            lager:debug("job ~s with pid ~p terminated normally", [JobId, Pid]),
             Account = maps:get(AccountId, Accounts, #{jobs => #{}}),
             Jobs = maps:without([JobId], maps:get('jobs', Account, #{})),
             State = case maps:size(Jobs) of
@@ -177,8 +180,8 @@ apply(#{index := RaftIdx}, {'down', Pid, Error}, #{pids := Pids, accounts := Acc
                              ,ref => Ref
                              ,raft => Index
                              },
-                    lager:debug("job ~s (~p) terminate with error '~p', starting the worker again"
-                               ,[JobId, Pid, Error]
+                    lager:debug("job ~s with pid ~p terminated with error, try start the worker in ~bms: ~p"
+                               ,[JobId, Pid, ?START_RETRY, Error]
                                ),
                     Hst = maps:get('history', Job, #{}),
                     History = Hst#{RaftIdx => Entry},
@@ -191,22 +194,31 @@ apply(#{index := RaftIdx}, {'down', Pid, Error}, #{pids := Pids, accounts := Acc
                     NewState = State#{pids => maps:without([Pid], Pids)
                                      ,accounts => Accounts#{AccountId => Account#{jobs => NewJobs}}
                                      },
-                    Effects = [{'mod_call', ?MODULE, 'start_worker', [AccountId, JobId, Ref]}],
+                    Effects = [{'timer', {'start_retry', {AccountId, JobId, Ref}}, ?START_RETRY}],
                     {NewState, 'ok', Effects};
                 _Other -> {State, {'error', 'not_found'}}
             end;
 
-        _ -> {State, ok}
+        _ -> {State, 'ok'}
     end;
+
+apply(#{index := RaftIdx}
+     ,{'remove_pid', {ForceKill, JobId, Job}}
+     ,State0
+     ) ->
+    {NewState, Effects0} = maybe_remove_pid_from_state(ForceKill, JobId, Job, State0),
+    Effects = Effects0 ++ [{'release_cursor', RaftIdx, NewState}],
+    {'ok', NewState, Effects};
 
 apply(#{index := RaftIdx}
      ,{'remove_job', {AccountId, JobId, Ref}}
      ,State0
      ) ->
     case maybe_remove_job_from_account_state(AccountId, JobId, Ref, State0) of
-        {'ok', State1, Job} ->
-            {NewState, Effects0} = maybe_remove_pid_from_state('false', AccountId, JobId, Job, State1),
-            Effects = Effects0 ++ [{'release_cursor', RaftIdx, NewState}],
+        {'ok', NewState, Job} ->
+            Effects = [{'mod_call', ?MODULE, 'process_command', [{'remove_pid', {'false', JobId, Job}}]}
+                      ,{'release_cursor', RaftIdx, NewState}
+                      ],
             {NewState, {'ok', Job}, Effects};
         {'error', 'not_found'}=Error ->
             {State0, Error}
@@ -217,9 +229,10 @@ apply(#{index := RaftIdx}
      ,State0
      ) ->
     case maybe_remove_job_from_account_state(AccountId, JobId, State0) of
-        {'ok', State1, Job} ->
-            {NewState, Effects0} = maybe_remove_pid_from_state('false', AccountId, JobId, Job, State1),
-            Effects = Effects0 ++ [{'release_cursor', RaftIdx, NewState}],
+        {'ok', NewState, Job} ->
+            Effects = [{'mod_call', ?MODULE, 'process_command', [{'remove_pid', {'false', JobId, Job}}]}
+                      ,{'release_cursor', RaftIdx, NewState}
+                      ],
             {NewState, {'ok', Job}, Effects};
         {'error', 'not_found'}=Error ->
             {State0, Error}
@@ -230,9 +243,10 @@ apply(#{index := RaftIdx}
      ,State0
      ) ->
     case maybe_remove_job_from_account_state(AccountId, JobId, State0) of
-        {'ok', State1, Job} ->
-            {NewState, Effects0} = maybe_remove_pid_from_state('true', AccountId, JobId, Job, State1),
-            Effects = Effects0 ++ [{'release_cursor', RaftIdx, NewState}],
+        {'ok', NewState, Job} ->
+            Effects = [{'mod_call', ?MODULE, 'process_command', [{'remove_pid', {'true', JobId, Job}}]}
+                      ,{'release_cursor', RaftIdx, NewState}
+                      ],
             {NewState, {'ok', Job}, Effects};
         {'error', 'not_found'}=Error ->
             {State0, Error}
@@ -276,6 +290,7 @@ apply(#{index := RaftIdx}
             History = Hst#{Ref => Entry},
             NewJobs = Jobs#{JobId => Job#{history => History
                                          ,ref => NewRef
+                                         ,retried => maps:get('retried', Job, 0) + 1
                                          }
                            },
             %% FIXME: demonitor old pid? remove old pid from state?
@@ -326,7 +341,7 @@ apply(#{index := RaftIdx}
      ) ->
     case maps:get(AccountId, Accounts, 'undefined') of
         #{jobs := #{JobId := #{ref := Ref, raft := Index} = Job} = Jobs} = Account ->
-            lager:debug("failed to start job ~s, will try to starting it again in ~bs: ~p"
+            lager:debug("failed to start job ~s, will try to starting it again in ~bms: ~p"
                        ,[JobId, ?START_RETRY, Error]
                        ),
             Entry = #{error => Error
@@ -353,7 +368,7 @@ apply(#{index := _RaftIdx}
      ) ->
     case maps:get(AccountId, Accounts, 'undefined') of
         #{jobs := #{JobId := #{ref := Ref} = Job}} ->
-            lager:debug("trying to start job ~s for the ~s time", [JobId, maps:get('retried', Job, 0)]),
+            lager:debug("trying to start job ~s for the ~b time", [JobId, maps:get('retried', Job, 0)]),
             Effects = [{'mod_call', ?MODULE, 'start_worker', [AccountId, JobId, Ref]}],
             {State, 'ok', Effects};
         _Else ->
@@ -434,9 +449,9 @@ remove_job_from_account_state(AccountId, JobId
     {'ok', NewState, Job}.
 
 %% @private
--spec maybe_remove_pid_from_state(boolean(), account_id(), job_id(), map(), state()) ->
+-spec maybe_remove_pid_from_state(boolean(), job_id(), map(), state()) ->
           {state(), ra_machine:effects()}.
-maybe_remove_pid_from_state(ShouldKill, _AccountId, JobId
+maybe_remove_pid_from_state(ShouldKill, JobId
                            ,#{pid := Pid, node := Node}
                            ,#{pids := Pids}=State
                            ) ->
@@ -447,7 +462,7 @@ maybe_remove_pid_from_state(ShouldKill, _AccountId, JobId
                        ),
             {State#{pids => maps:without([Pid], Pids)}, [{'demonitor', 'process', Pid}]};
         'true' when ShouldKill ->
-            KillResult = rpc:call(Node, 'erlang', 'exit', [Pid, 'normal']),
+            KillResult = rpc:call(Node, 'supervisor', 'terminate_child', ['fax_worker_sup', Pid]),
             lager:debug("job ~s pid ~p is still alive on node ~p, force exiting it result in ~p"
                        ,[JobId, Pid, Node, KillResult]
                        ),
@@ -456,7 +471,7 @@ maybe_remove_pid_from_state(ShouldKill, _AccountId, JobId
             lager:debug("job ~s pid ~p is still alive on node ~p, not removing pid", [JobId, Pid, Node]),
             {State, []};
         {'badrpc', Error} when ShouldKill ->
-            KillResult = rpc:call(Node, 'erlang', 'exit', [Pid, 'normal']),
+            KillResult = rpc:call(Node, 'supervisor', 'terminate_child', ['fax_worker_sup', Pid]),
             lager:debug("failed to query job ~s pid ~p aliveness on node ~p, force exiting it result in ~p"
                         ,[JobId, Pid, Node, Error, KillResult]
                        ),
