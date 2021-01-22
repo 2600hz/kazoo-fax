@@ -1,5 +1,5 @@
 %%%-----------------------------------------------------------------------------
-%%% @copyright (C) 2012-2020, 2600Hz
+%%% @copyright (C) 2012-2021, 2600Hz
 %%% @doc
 %%% This Source Code Form is subject to the terms of the Mozilla Public
 %%% License, v. 2.0. If a copy of the MPL was not distributed with this
@@ -38,9 +38,10 @@ start_listener(Workers, Dispatch, Port) ->
                            ,#{'socket_opts' => [{'port', Port}]
                              ,'num_acceptors' => Workers
                              }
-                           ,#{'env' => #{'dispatch' => Dispatch}})
+                           ,#{'env' => #{'dispatch' => Dispatch}}
+                           )
     of
-        {error,eaddrinuse} -> start_listener(Workers, Dispatch, Port+1);
+        {'error', 'eaddrinuse'} -> start_listener(Workers, Dispatch, Port+1);
         _Other -> _Other
     end.
 

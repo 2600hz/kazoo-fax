@@ -1,6 +1,6 @@
 %%%-----------------------------------------------------------------------------
-%%% @copyright (C) 2013-2020, 2600Hz
-%%% @doc
+%%% @copyright (C) 2013-2021, 2600Hz
+%%% @doc Utilities for faxing
 %%% @author James Aimonetti
 %%%
 %%% This Source Code Form is subject to the terms of the Mozilla Public
@@ -40,7 +40,10 @@ collect_channel_props(JObj, List, Acc) ->
                         collect_channel_props(kz_json:get_value(Key, JObj), Keys, Acc0);
                    (Key, Acc0) ->
                         [collect_channel_prop(Key, JObj) | Acc0]
-                end, Acc, List).
+                end
+               ,Acc
+               ,List
+               ).
 
 -spec collect_channel_prop(kz_term:ne_binary(), kz_json:object()) ->
           {kz_json:path(), kz_json:json_term()}.
@@ -86,5 +89,5 @@ is_valid_caller_id(Number, AccountId) ->
 -spec is_digit(integer()) -> boolean().
 is_digit(N) when is_integer(N),
                  N >= $0,
-                 N =< $9 -> true;
-is_digit(_) -> false.
+                 N =< $9 -> 'true';
+is_digit(_) -> 'false'.

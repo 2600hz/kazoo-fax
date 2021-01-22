@@ -1,6 +1,6 @@
 %%%-----------------------------------------------------------------------------
-%%% @copyright (C) 2012-2020, 2600Hz
-%%% @doc
+%%% @copyright (C) 2012-2021, 2600Hz
+%%% @doc Worker to pull jobs
 %%% @author Karl Anderson
 %%% @author Luis Azedo
 %%%
@@ -30,9 +30,11 @@
 
 -include("fax.hrl").
 
--define(MOVE_RETRY_INTERVAL, 5000).
+-define(MOVE_RETRY_INTERVAL, 5 * ?MILLISECONDS_IN_SECOND).
 -define(MAX_MOVE_RETRY, 5).
--define(MAX_MOVE_NOTIFY_MSG, "failed to move fax outbound document ~s from faxes database to account ~s modb").
+-define(MAX_MOVE_NOTIFY_MSG
+       ,"failed to move fax outbound document ~s from faxes database to account ~s modb"
+       ).
 
 -record(state, {queue_name :: kz_term:api_binary()
                ,job_id :: kz_term:ne_binary()
@@ -132,7 +134,7 @@ handle_fax_event(JObj, Props) ->
     Event = kz_call_event:application_event(JObj),
     gen_server:cast(Srv, {'fax_status', Event, JobId, JObj}).
 
--spec handle_job_status_query(kz_json:object(), kz_term:proplist()) -> any().
+-spec handle_job_status_query(kz_json:object(), kz_term:proplist()) -> 'ok'.
 handle_job_status_query(JObj, Props) ->
     'true' = kapi_fax:query_status_v(JObj),
     Srv = props:get_value('server', Props),
