@@ -65,7 +65,9 @@
                    {'start_worker_result', {account_id(), job_id(), reference(), node(), start_worker_ret()}} |
                    ra_machine:effect().
 
--define(DEFAULT_LIMITS(AccountId), kapps_account_config:get_global(AccountId, ?CONFIG_CAT, <<"max_outbound">>, 10)).
+-define(DEFAULT_LIMITS(AccountId)
+       ,kapps_account_config:get_global(AccountId, ?CONFIG_CAT, <<"max_outbound">>, 10)
+       ).
 -define(TICK_INTERVAL, 5 * ?MILLISECONDS_IN_SECOND).
 
 -define(RPC_CALL_TIMEOUT, 5 * ?MILLISECONDS_IN_SECOND).
@@ -136,7 +138,10 @@ init(#{name := Name}) ->
           {state(), Reply :: term(), ra_machine:effects()} |
           {state(), Reply :: term()}.
 
-apply(#{index := _RaftIdx}, {'account_jobs', AccountId}, State) ->
+apply(#{index := _RaftIdx}
+     ,{'account_jobs', AccountId}
+     ,State
+     ) ->
     case find_account_in_state(AccountId, State) of
         {'ok', #{jobs := Jobs}} ->
             {State, {'ok', Jobs}};
@@ -197,10 +202,12 @@ apply(#{index := RaftIdx}, {'down', Pid, Error}, #{pids := Pids, accounts := Acc
                                                     ,retried => maps:get('retried', Job, 0) + 1
                                                     }
                                    },
+                    TimerPayload = {'start_retry', {AccountId, JobId, Ref}},
                     NewState = State#{pids => maps:without([Pid], Pids)
                                      ,accounts => Accounts#{AccountId => Account#{jobs => NewJobs}}
+                                     ,timer => [TimerPayload | maps:get('restart_timers', State, [])]
                                      },
-                    Effects = [{'timer', {'start_retry', {AccountId, JobId, Ref}}, ?START_RETRY}],
+                    Effects = [{'timer', TimerPayload, ?START_RETRY}],
                     {NewState, 'ok', Effects};
                 _Other -> {State, {'error', 'not_found'}}
             end;
@@ -303,8 +310,11 @@ apply(#{index := RaftIdx}
                                          }
                            },
             %% FIXME: demonitor old pid? remove old pid from state?
-            NewState = State#{accounts => Accounts#{AccountId => Account#{jobs => NewJobs}}},
-            Effects = [{'timer', {'start_retry', {AccountId, JobId, NewRef}}, ?START_RETRY}],
+            TimerPayload = {'start_retry', {AccountId, JobId, NewRef}},
+            NewState = State#{accounts => Accounts#{AccountId => Account#{jobs => NewJobs}}
+                             ,timer => [TimerPayload | maps:get('restart_timers', State, [])]
+                             },
+            Effects = [{'timer', TimerPayload, ?START_RETRY}],
             {NewState, 'ok', Effects};
         _Else ->
             {State, {'error', 'not_found'}}
@@ -368,8 +378,12 @@ apply(#{index := RaftIdx}
                                          ,retried => maps:get('retried', Job, 0) + 1
                                          }
                            },
-            Effects = [{'timer', {'start_retry', {AccountId, JobId, Ref}}, ?START_RETRY}],
-            {State#{accounts => Accounts#{AccountId => Account#{jobs => NewJobs}}}, 'ok', Effects};
+            TimerPayload = {'start_retry', {AccountId, JobId, Ref}},
+            NewState = State#{accounts => Accounts#{AccountId => Account#{jobs => NewJobs}}
+                             ,timer => [TimerPayload | maps:get('restart_timers', State, [])]
+                             },
+            Effects = [{'timer', TimerPayload, ?START_RETRY}],
+            {NewState, 'ok', Effects};
         _Else ->
             {State, {'error', 'not_found'}}
     end;
@@ -518,11 +532,12 @@ get_account_job_from_state(AccountId, JobId, State) ->
     end.
 
 -spec state_enter(ra_server:ra_state(), state()) -> ra_machine:effects().
-state_enter('leader', #{pids := PMap}) ->
+state_enter('leader', #{pids := PMap}=State) ->
     Pids = maps:keys(PMap),
     Mons = [{'monitor', 'process', P} || P <- Pids],
     NodeMons = lists:usort([{'monitor', 'node', node(P)} || P <- Pids]),
-    Effects = Mons ++ NodeMons,
+    Timers = [{'timer', TimerPayload, ?START_RETRY} || TimerPayload <- maps:get('restart_timers', State, [])],
+    Effects = Mons ++ NodeMons ++ Timers,
     Effects;
 state_enter(_, _) -> [].
 
