@@ -102,10 +102,19 @@ kill_job(AccountId, JobId) ->
 
 %% @private
 process_command(Cmd) ->
-    case ra:process_command(ra_name(), Cmd) of
-        {'timeout', _}=Error -> Error;
-        {'error', 'noproc'}=Error -> Error;
-        Reply -> Reply
+    process_command(members(), Cmd).
+
+process_command([], _Cmd) ->
+    {'error', 'server_unavailable'};
+process_command([Server | Servers], Cmd) ->
+    case ra:process_command(Server, Cmd) of
+        {'timeout', _} ->
+            lager:warning("timeout on server ~p when processing command ~p", [Server, Cmd]),
+            process_command(Servers, Cmd);
+        {'error', 'noproc'} ->
+            process_command(Servers, Cmd);
+        Reply ->
+            Reply
     end.
 
 -spec init(map()) -> state().
