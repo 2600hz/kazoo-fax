@@ -42,8 +42,10 @@
 
 
 -export([account_jobs/1
-        ,job_info/2
         ,remove_job/2
+        ,remove_stale_job/2
+        ,kill_job/2
+        ,job_info/2
         ]).
 
 -include("fax.hrl").
@@ -86,6 +88,19 @@ job_info(AccountId, JobId) ->
 remove_job(AccountId, JobId) ->
     process_command({'remove_job', AccountId, JobId}).
 
+-spec remove_stale_job(AccountId::kz_term:ne_binary(), JobId::kz_term:ne_binary()) ->
+         {'ok', Job::map()} |
+         {'error', 'timeout' | 'noproc' | 'not_found'}.
+remove_stale_job(AccountId, JobId) ->
+    process_command({'remove_stale_job', AccountId, JobId}).
+
+-spec kill_job(AccountId::kz_term:ne_binary(), JobId::kz_term:ne_binary()) ->
+         {'ok', Job::map()} |
+         {'error', 'timeout' | 'noproc' | 'not_found'}.
+kill_job(AccountId, JobId) ->
+    process_command({'kill_job', AccountId, JobId}).
+
+%% @private
 process_command(Cmd) ->
     case ra:process_command(ra_name(), Cmd) of
         {'timeout', _}=Error -> Error;
@@ -120,6 +135,7 @@ apply(#{index := _RaftIdx}, {'job_info', AccountId, JobId}, State) ->
         _ ->
             {State, {'error', 'not_found'}}
     end;
+
 apply(#{index := RaftIdx}, {'down', Pid, 'normal'}, #{pids := Pids, accounts := Accounts} = State0) ->
     case maps:get(Pid, Pids, 'undefined') of
         #{account_id := AccountId, job_id := JobId} ->
@@ -175,23 +191,66 @@ apply(#{index := RaftIdx}, {'down', Pid, Error}, #{pids := Pids, accounts := Acc
     end;
 
 apply(#{index := RaftIdx}
-     ,{'remove_job', {AccountId, JobId}}
-     ,State
+     ,{'remove_job', {AccountId, JobId, Ref}}
+     ,State0
      ) ->
-    case maybe_remove_job_from_state(AccountId, JobId, State) of
-        {'ok', NewState, Pid} when is_pid(Pid) ->
+    case maybe_remove_job_from_account_state(AccountId, JobId, Ref, State0) of
+        {'ok', State1, Job} ->
+            {NewState, Effects0} = maybe_remove_pid_from_state('false', AccountId, JobId, Job, State1),
+            Effects = Effects0 ++ [{'release_cursor', RaftIdx, NewState}],
+            {NewState, {'ok', Job}, Effects};
+        {'error', 'not_found'}=Error ->
+            {State0, Error}
+    end;
+
+apply(#{index := RaftIdx}
+     ,{'remove_stale_job', {AccountId, JobId}}
+     ,State0
+     ) ->
+    case maybe_remove_job_from_account_state(AccountId, JobId, State0) of
+        {'ok', State1, Job} ->
+            {NewState, Effects0} = maybe_remove_pid_from_state('false', AccountId, JobId, Job, State1),
+            Effects = Effects0 ++ [{'release_cursor', RaftIdx, NewState}],
+            {NewState, {'ok', Job}, Effects};
+        {'error', 'not_found'}=Error ->
+            {State0, Error}
+    end;
+
+apply(#{index := RaftIdx}
+     ,{'kill_job', {AccountId, JobId}}
+     ,State0
+     ) ->
+    case maybe_remove_job_from_account_state(AccountId, JobId, State0) of
+        {'ok', State1, Job} ->
+            {NewState, Effects0} = maybe_remove_pid_from_state('true', AccountId, JobId, Job, State1),
+            Effects = Effects0 ++ [{'release_cursor', RaftIdx, NewState}],
+            {NewState, {'ok', Job}, Effects};
+        {'error', 'not_found'}=Error ->
+            {State0, Error}
+    end;
+
+apply(#{index := RaftIdx}
+     ,{'force_remove_pid', Pid}
+     ,#{pids := Pids, accounts := Accounts} = State0
+     ) ->
+    case maps:get(Pid, Pids, 'undefined') of
+        #{account_id := AccountId, job_id := JobId} ->
+            lager:debug("removing pid ~p with job id ~s", [Pid, JobId]),
+            Account = maps:get(AccountId, Accounts, #{jobs => #{}}),
+            Jobs = maps:without([JobId], maps:get('jobs', Account, #{})),
+            State = case maps:size(Jobs) of
+                        0 -> State0#{pids => maps:without([Pid], Pids)
+                                    ,accounts => maps:without([AccountId], Accounts)
+                                    };
+                        _ -> State0#{pids => maps:without([Pid], Pids)
+                                    ,accounts => maps:update(AccountId, Account#{jobs => Jobs}, Accounts)
+                                    }
+                    end,
             Effects = [{'demonitor', 'process', Pid}
-                      ,{'release_cursor', RaftIdx, NewState}
+                      ,{'release_cursor', RaftIdx, State}
                       ],
-            {NewState, 'ok', Effects};
-        {'ok', NewState, {_Alive, _Node, _Pid}=Reply} ->
-            Effects = [{'release_cursor', RaftIdx, NewState}],
-            {NewState, Reply, Effects};
-        {'ok', NewState, 'no_pid'} ->
-            Effects = [{'release_cursor', RaftIdx, NewState}],
-            {NewState, 'ok', Effects};
-        Error ->
-            {State, Error}
+            {State, 'ok', Effects};
+        _ -> {State0, {'error', 'not_found'}}
     end;
 
 apply(#{index := RaftIdx}
@@ -321,41 +380,76 @@ maybe_account_is_done(AccountId, Account, Accounts) ->
     Accounts#{AccountId => Account}.
 
 %% @private
--spec maybe_remove_job_from_state(kz_term:ne_binary(), kz_term:ne_binary(), state()) ->
-          {'ok', state(), pid() | 'no_pid' | {'alive' | 'badrpc', node(), pid()}} |
+-spec maybe_remove_job_from_account_state(kz_term:ne_binary(), kz_term:ne_binary(), state()) ->
+          {'ok', state(), Job::map()} |
           {'error', 'not_found'}.
-maybe_remove_job_from_state(AccountId, JobId, #{accounts := Accounts, pids := Pids} = State) ->
+maybe_remove_job_from_account_state(AccountId, JobId, State) ->
     case get_account_job_from_state(AccountId, JobId, State) of
-        {'ok', {Account, #{pid := Pid, node := Node}}} ->
-            lager:debug("removing job ~s", [JobId]),
-            NewJobs = maps:without([JobId], maps:get('jobs', Account, #{})),
-            NewState = State#{accounts =>
-                              maybe_account_is_done(AccountId, Account#{jobs => NewJobs}, Accounts)
-                             },
-            case rpc:call(Node, 'erlang', 'is_process_alive', [Pid], ?RPC_CALL_TIMEOUT) of
-                'false' ->
-                    lager:debug("job ~s pid ~p is not alive, removing it from state"
-                               ,[JobId, Pid]
-                               ),
-                    {'ok', NewState#{pids => maps:without([Pid], Pids)}, Pid};
-                'true' ->
-                    lager:debug("job ~s pid ~p is still alive on node ~p", [JobId, Pid, Node]),
-                    {'ok', NewState, {'alive', Node, Pid}};
-                {'badrpc', Error} ->
-                    lager:debug("failed to query job ~s pid ~p aliveness on node ~p: ~p"
-                               ,[JobId, Pid, Node, Error]
-                               ),
-                    {'ok', NewState, {'badrpc', Node, Pid}}
-            end;
-        {'ok', {Account, _Job}} ->
-            lager:debug("removing job ~s", [JobId]),
-            NewJobs = maps:without([JobId], maps:get('jobs', Account, #{})),
-            {'ok'
-            ,State#{accounts => maybe_account_is_done(AccountId, Account#{jobs => NewJobs}, Accounts)}
-            ,'no_pid'
-            };
+        {'ok', AccountJob} ->
+            remove_job_from_account_state(AccountId, JobId, AccountJob, State);
         {'error', 'not_found'} ->
             {'error', 'not_found'}
+    end.
+
+%% @private
+-spec maybe_remove_job_from_account_state(kz_term:ne_binary(), kz_term:ne_binary(), reference(), state()) ->
+          {'ok', state(), Job::map()} |
+          {'error', 'not_found'}.
+maybe_remove_job_from_account_state(AccountId, JobId, Ref, State) ->
+    case get_account_job_from_state(AccountId, JobId, State) of
+        {'ok', {_Account, #{ref := Ref}}=AccountJob} ->
+            remove_job_from_account_state(AccountId, JobId, AccountJob, State);
+        {'error', 'not_found'} ->
+            {'error', 'not_found'}
+    end.
+
+%% @private
+-spec remove_job_from_account_state(kz_term:ne_binary(), kz_term:ne_binary(), tuple(), state()) ->
+          {'ok', state(), map()}.
+remove_job_from_account_state(AccountId, JobId
+                             ,{Account, Job}
+                             ,#{accounts := Accounts} = State
+                             ) ->
+    lager:debug("removing job ~s", [JobId]),
+    NewJobs = maps:without([JobId], maps:get('jobs', Account, #{})),
+    NewState = State#{accounts =>
+                      maybe_account_is_done(AccountId, Account#{jobs => NewJobs}, Accounts)
+                     },
+    {'ok', NewState, Job}.
+
+%% @private
+-spec maybe_remove_pid_from_state(boolean(), account_id(), job_id(), map(), state()) ->
+          {state(), ra_machine:effects()}.
+maybe_remove_pid_from_state(ShouldKill, _AccountId, JobId
+                           ,#{pid := Pid, node := Node}
+                           ,#{pids := Pids}=State
+                           ) ->
+    case rpc:call(Node, 'erlang', 'is_process_alive', [Pid], ?RPC_CALL_TIMEOUT) of
+        'false' ->
+            lager:debug("job ~s pid ~p is not alive, removing it from state"
+                        ,[JobId, Pid]
+                       ),
+            {State#{pids => maps:without([Pid], Pids)}, [{'demonitor', 'process', Pid}]};
+        'true' when ShouldKill ->
+            KillResult = rpc:call(Node, 'erlang', 'exit', [Pid, 'normal']),
+            lager:debug("job ~s pid ~p is still alive on node ~p, force exiting it result in ~p"
+                       ,[JobId, Pid, Node, KillResult]
+                       ),
+            {State, [{'demonitor', 'process', Pid}]};
+        'true' ->
+            lager:debug("job ~s pid ~p is still alive on node ~p, not removing pid", [JobId, Pid, Node]),
+            {State, []};
+        {'badrpc', Error} when ShouldKill ->
+            KillResult = rpc:call(Node, 'erlang', 'exit', [Pid, 'normal']),
+            lager:debug("failed to query job ~s pid ~p aliveness on node ~p, force exiting it result in ~p"
+                        ,[JobId, Pid, Node, Error, KillResult]
+                       ),
+            {State, [{'demonitor', 'process', Pid}]};
+        {'badrpc', Error} ->
+            lager:debug("failed to query job ~s pid ~p aliveness on node ~p, not removing pid: ~p"
+                        ,[JobId, Pid, Node, Error]
+                       ),
+            {State, []}
     end.
 
 %% @private
