@@ -113,7 +113,10 @@ process_command([Server | Servers], Cmd) ->
     case ra:process_command(Server, Cmd) of
         {'timeout', _} ->
             lager:warning("timeout on server ~p when processing command ~p", [Server, Cmd]),
-            process_command(Servers, Cmd);
+            %% idk why it always receive timeout althought I' getting
+            %% the reply in the shell.
+            %% process_command(Servers, Cmd);
+            {'error', 'timeout'};
         {'error', 'noproc'} ->
             process_command(Servers, Cmd);
         Reply ->
@@ -220,10 +223,9 @@ apply(#{index := RaftIdx}
      ) ->
     kz_log:put_callid(JobId),
     case maybe_remove_job_from_account_state(AccountId, JobId, Ref, State0) of
-        {'ok', NewState, Job} ->
-            Effects = [{'mod_call', ?MODULE, 'process_command', [{'remove_pid', {'false', JobId, Job}}]}
-                      ,{'release_cursor', RaftIdx, NewState}
-                      ],
+        {'ok', State1, Job} ->
+            {NewState, Effects0} = maybe_remove_pid_from_state('false', JobId, Job, State1),
+            Effects = Effects0 ++ [{'release_cursor', RaftIdx, NewState}],
             {NewState, {'ok', Job}, Effects};
         {'error', 'not_found'}=Error ->
             {State0, Error}
@@ -235,10 +237,9 @@ apply(#{index := RaftIdx}
      ) ->
     kz_log:put_callid(JobId),
     case maybe_remove_job_from_account_state(AccountId, JobId, State0) of
-        {'ok', NewState, Job} ->
-            Effects = [{'mod_call', ?MODULE, 'process_command', [{'remove_pid', {'false', JobId, Job}}]}
-                      ,{'release_cursor', RaftIdx, NewState}
-                      ],
+        {'ok', State1, Job} ->
+            {NewState, Effects0} = maybe_remove_pid_from_state('false', JobId, Job, State1),
+            Effects = Effects0 ++ [{'release_cursor', RaftIdx, NewState}],
             {NewState, {'ok', Job}, Effects};
         {'error', 'not_found'}=Error ->
             {State0, Error}
@@ -250,10 +251,9 @@ apply(#{index := RaftIdx}
      ) ->
     kz_log:put_callid(JobId),
     case maybe_remove_job_from_account_state(AccountId, JobId, State0) of
-        {'ok', NewState, Job} ->
-            Effects = [{'mod_call', ?MODULE, 'process_command', [{'remove_pid', {'true', JobId, Job}}]}
-                      ,{'release_cursor', RaftIdx, NewState}
-                      ],
+        {'ok', State1, Job} ->
+            {NewState, Effects0} = maybe_remove_pid_from_state('true', JobId, Job, State1),
+            Effects = Effects0 ++ [{'release_cursor', RaftIdx, NewState}],
             {NewState, {'ok', Job}, Effects};
         {'error', 'not_found'}=Error ->
             {State0, Error}
@@ -501,7 +501,9 @@ find_account_in_state(AccountId, #{accounts := Accounts}) ->
     case maps:get(AccountId, Accounts, 'undefined') of
         'undefined' -> {'error', 'not_found'};
         #{} = Account -> {'ok', Account}
-    end.
+    end;
+find_account_in_state(_, _) ->
+    {'error', 'not_found'}.
 
 %% @private
 -spec get_account_job_from_state(kz_term:ne_binary(), kz_term:ne_binary(), state()) ->
