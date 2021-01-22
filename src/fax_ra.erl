@@ -84,25 +84,25 @@ account_jobs(AccountId) ->
          {'ok', Job::map()} |
          {'error', 'timeout' | 'noproc' | 'not_found'}.
 job_info(AccountId, JobId) ->
-    process_command({'job_info', AccountId, JobId}).
+    process_command({'job_info', {AccountId, JobId}}).
 
 -spec remove_job(AccountId::kz_term:ne_binary(), JobId::kz_term:ne_binary()) ->
          {'ok', Job::map()} |
          {'error', 'timeout' | 'noproc' | 'not_found'}.
 remove_job(AccountId, JobId) ->
-    process_command({'remove_job', AccountId, JobId}).
+    process_command({'remove_job', {AccountId, JobId}}).
 
 -spec remove_stale_job(AccountId::kz_term:ne_binary(), JobId::kz_term:ne_binary()) ->
          {'ok', Job::map()} |
          {'error', 'timeout' | 'noproc' | 'not_found'}.
 remove_stale_job(AccountId, JobId) ->
-    process_command({'remove_stale_job', AccountId, JobId}).
+    process_command({'remove_stale_job', {AccountId, JobId}}).
 
 -spec kill_job(AccountId::kz_term:ne_binary(), JobId::kz_term:ne_binary()) ->
          {'ok', Job::map()} |
          {'error', 'timeout' | 'noproc' | 'not_found'}.
 kill_job(AccountId, JobId) ->
-    process_command({'kill_job', AccountId, JobId}).
+    process_command({'kill_job', {AccountId, JobId}}).
 
 %% @private
 -spec process_command(any()) -> any().
@@ -119,9 +119,9 @@ process_command([Server | Servers], Cmd) ->
             %% the reply in the shell.
             %% process_command(Servers, Cmd);
             {'error', 'timeout'};
-        {'error', 'noproc'} ->
+        {'error', _Error} ->
             process_command(Servers, Cmd);
-        Reply ->
+        {'ok', Reply, _ServerId} ->
             Reply
     end.
 
@@ -149,7 +149,7 @@ apply(#{index := _RaftIdx}
             {State, {'error', 'not_found'}}
     end;
 apply(#{index := _RaftIdx}
-     ,{'job_info', AccountId, JobId}
+     ,{'job_info', {AccountId, JobId}}
      ,State
      ) ->
     kz_log:put_callid(JobId),
@@ -160,7 +160,10 @@ apply(#{index := _RaftIdx}
             {State, {'error', 'not_found'}}
     end;
 
-apply(#{index := RaftIdx}, {'down', Pid, 'normal'}, #{pids := Pids, accounts := Accounts} = State0) ->
+apply(#{index := RaftIdx}
+     ,{'down', Pid, 'normal'}
+     ,#{pids := Pids, accounts := Accounts} = State0
+     ) ->
     case maps:get(Pid, Pids, 'undefined') of
         #{account_id := AccountId, job_id := JobId} ->
             kz_log:put_callid(JobId),
@@ -179,10 +182,14 @@ apply(#{index := RaftIdx}, {'down', Pid, 'normal'}, #{pids := Pids, accounts := 
                       ,{'release_cursor', RaftIdx, State}
                       ],
             {State, 'ok', Effects};
-        _ -> {State0, 'ok'}
+        _ ->
+            {State0, 'ok'}
     end;
 
-apply(#{index := RaftIdx}, {'down', Pid, Error}, #{pids := Pids, accounts := Accounts} = State) ->
+apply(#{index := RaftIdx}
+     ,{'down', Pid, Error}
+     ,#{pids := Pids, accounts := Accounts} = State
+     ) ->
     case maps:get(Pid, Pids, 'undefined') of
         #{account_id := AccountId, job_id := JobId} ->
             case maps:get(AccountId, Accounts, 'undefined') of
@@ -212,7 +219,8 @@ apply(#{index := RaftIdx}, {'down', Pid, Error}, #{pids := Pids, accounts := Acc
                                      },
                     Effects = [{'timer', TimerPayload, ?START_RETRY}],
                     {NewState, 'ok', Effects};
-                _Other -> {State, {'error', 'not_found'}}
+                _Other ->
+                    {State#{pids => maps:without([Pid], Pids)}, {'error', 'not_found'}}
             end;
 
         _ -> {State, 'ok'}
@@ -432,7 +440,8 @@ apply(#{index := RaftIdx}
     end;
 
 apply(_Meta, _Msg, State) ->
-    {State, 'ok'}.
+    lager:debug("recieved unknown command: ~p", [_Msg]),
+    {State, {'error', 'unknown_command'}, []}.
 
 %% @private
 -spec maybe_account_is_done(AccountId::kz_term:ne_binary(), Account::map(), Accounts::map()) -> Accounts::map().
