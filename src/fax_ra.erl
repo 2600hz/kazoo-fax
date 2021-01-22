@@ -55,12 +55,15 @@
 
 -type command() :: {'remove_job', {account_id(), job_id(), reference()}} |
                    {'restart_job', {account_id(), job_id(), OldRef::reference(), NewRef::reference()}} |
+                   {'timeout', {'start_retry', {account_id(), job_id(), reference()}}} |
                    {'start_worker', {account_id(), job_id(), reference()}} |
                    {'start_worker_result', {account_id(), job_id(), reference(), node(), start_worker_ret()}} |
                    ra_machine:effect().
 
 -define(DEFAULT_LIMITS(AccountId), kapps_account_config:get_global(AccountId, ?CONFIG_CAT, <<"max_outbound">>, 10)).
 -define(TICK_INTERVAL, 5 * ?MILLISECONDS_IN_SECOND).
+
+-define(START_RETRY, 10 * ?MILLISECONDS_IN_SECOND).
 
 
 -spec account_jobs(AccountId::kz_term:ne_binary()) ->
@@ -236,7 +239,9 @@ apply(#{index := RaftIdx}
      ) ->
     case maps:get(AccountId, Accounts, 'undefined') of
         #{jobs := #{JobId := #{ref := Ref, raft := Index} = Job} = Jobs} = Account ->
-            lager:debug("failed to start job ~s, will try to starting again: ~p", [JobId, Error]),
+            lager:debug("failed to start job ~s, will try to starting it again in ~bs: ~p"
+                       ,[JobId, ?START_RETRY, Error]
+                       ),
             Entry = #{error => Error
                      ,node => Node
                      ,raft => Index
@@ -246,10 +251,24 @@ apply(#{index := RaftIdx}
             History = Hst#{RaftIdx => Entry},
             NewJobs = Jobs#{JobId => Job#{history => History
                                          ,raft => RaftIdx
+                                         ,retried => maps:get('retried', Job, 0) + 1
                                          }
                            },
-            Effects = [{'mod_call', ?MODULE, 'start_worker', [AccountId, JobId, Ref]}],
+            Effects = [{'timer', {'start_retry', {AccountId, JobId, Ref}}, ?START_RETRY}],
             {State#{accounts => Accounts#{AccountId => Account#{jobs => NewJobs}}}, 'ok', Effects};
+        _Else ->
+            {State, {'error', 'not_found'}}
+    end;
+
+apply(#{index := _RaftIdx}
+     ,{'timeout', {'start_retry', {AccountId, JobId, Ref}}}
+     ,#{accounts := Accounts} = State
+     ) ->
+    case maps:get(AccountId, Accounts, 'undefined') of
+        #{jobs := #{JobId := #{ref := Ref} = Job}} ->
+            lager:debug("trying to start job ~s for the ~s time", [JobId, maps:get('retried', Job, 0)]),
+            Effects = [{'mod_call', ?MODULE, 'start_worker', [AccountId, JobId, Ref]}],
+            {State, 'ok', Effects};
         _Else ->
             {State, {'error', 'not_found'}}
     end;
