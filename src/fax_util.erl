@@ -1,6 +1,6 @@
 %%%-----------------------------------------------------------------------------
 %%% @copyright (C) 2013-2021, 2600Hz
-%%% @doc
+%%% @doc Utilities for faxing
 %%% @author James Aimonetti
 %%%
 %%% This Source Code Form is subject to the terms of the Mozilla Public

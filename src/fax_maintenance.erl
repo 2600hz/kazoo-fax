@@ -1,6 +1,6 @@
 %%%-----------------------------------------------------------------------------
 %%% @copyright (C) 2012-2021, 2600Hz
-%%% @doc
+%%% @doc Maintenance module for SUP
 %%% @author Luis Azedo
 %%%
 %%% This Source Code Form is subject to the terms of the Mozilla Public

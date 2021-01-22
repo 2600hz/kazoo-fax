@@ -1,6 +1,6 @@
 %%%-----------------------------------------------------------------------------
 %%% @copyright (C) 2012-2021, 2600Hz
-%%% @doc
+%%% @doc Worker to pull jobs
 %%% @author Karl Anderson
 %%% @author Luis Azedo
 %%%
