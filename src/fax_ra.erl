@@ -43,6 +43,7 @@
 
 -export([account_jobs/1
         ,job_info/2
+        ,remove_job/2
         ]).
 
 -include("fax.hrl").
@@ -63,6 +64,7 @@
 -define(DEFAULT_LIMITS(AccountId), kapps_account_config:get_global(AccountId, ?CONFIG_CAT, <<"max_outbound">>, 10)).
 -define(TICK_INTERVAL, 5 * ?MILLISECONDS_IN_SECOND).
 
+-define(RPC_CALL_TIMEOUT, 5 * ?MILLISECONDS_IN_SECOND).
 -define(START_RETRY, 10 * ?MILLISECONDS_IN_SECOND).
 
 
@@ -77,6 +79,12 @@ account_jobs(AccountId) ->
          {'error', 'timeout' | 'noproc' | 'not_found'}.
 job_info(AccountId, JobId) ->
     process_command({'job_info', AccountId, JobId}).
+
+-spec remove_job(AccountId::kz_term:ne_binary(), JobId::kz_term:ne_binary()) ->
+         {'ok', Job::map()} |
+         {'error', 'timeout' | 'noproc' | 'not_found'}.
+remove_job(AccountId, JobId) ->
+    process_command({'remove_job', AccountId, JobId}).
 
 process_command(Cmd) ->
     case ra:process_command(ra_name(), Cmd) of
@@ -152,6 +160,7 @@ apply(#{index := RaftIdx}, {'down', Pid, Error}, #{pids := Pids, accounts := Acc
                     NewJob = maps:without(['pid'], Job),
                     NewJobs = Jobs#{JobId => NewJob#{history => History
                                                     ,raft => RaftIdx
+                                                    ,retried => maps:get('retried', Job, 0) + 1
                                                     }
                                    },
                     NewState = State#{pids => maps:without([Pid], Pids)
@@ -170,13 +179,16 @@ apply(#{index := RaftIdx}
      ,State
      ) ->
     case maybe_remove_job_from_state(AccountId, JobId, State) of
-        {'ok', NewState} ->
-            Effects = [{'release_cursor', RaftIdx, NewState}],
-            {NewState, 'ok', Effects};
-        {'ok', NewState, Pid} ->
+        {'ok', NewState, Pid} when is_pid(Pid) ->
             Effects = [{'demonitor', 'process', Pid}
                       ,{'release_cursor', RaftIdx, NewState}
                       ],
+            {NewState, 'ok', Effects};
+        {'ok', NewState, {_Alive, _Node, _Pid}=Reply} ->
+            Effects = [{'release_cursor', RaftIdx, NewState}],
+            {NewState, Reply, Effects};
+        {'ok', NewState, 'no_pid'} ->
+            Effects = [{'release_cursor', RaftIdx, NewState}],
             {NewState, 'ok', Effects};
         Error ->
             {State, Error}
@@ -200,7 +212,7 @@ apply(#{index := RaftIdx}
                            },
             %% FIXME: demonitor old pid? remove old pid from state?
             NewState = State#{accounts => Accounts#{AccountId => Account#{jobs => NewJobs}}},
-            Effects = [{'mod_call', ?MODULE, 'start_worker', [AccountId, JobId, NewRef]}],
+            Effects = [{'timer', {'start_retry', {AccountId, JobId, NewRef}}, ?START_RETRY}],
             {NewState, 'ok', Effects};
         _Else ->
             {State, {'error', 'not_found'}}
@@ -310,25 +322,38 @@ maybe_account_is_done(AccountId, Account, Accounts) ->
 
 %% @private
 -spec maybe_remove_job_from_state(kz_term:ne_binary(), kz_term:ne_binary(), state()) ->
-          {'ok', state()} |
-          {'ok', state(), pid()} |
+          {'ok', state(), pid() | 'no_pid' | {'alive' | 'badrpc', node(), pid()}} |
           {'error', 'not_found'}.
 maybe_remove_job_from_state(AccountId, JobId, #{accounts := Accounts, pids := Pids} = State) ->
     case get_account_job_from_state(AccountId, JobId, State) of
-        {'ok', {Account, #{pid := Pid}}} ->
+        {'ok', {Account, #{pid := Pid, node := Node}}} ->
             lager:debug("removing job ~s", [JobId]),
             NewJobs = maps:without([JobId], maps:get('jobs', Account, #{})),
-            NewState = State#{accounts => maybe_account_is_done(AccountId, Account#{jobs => NewJobs}, Accounts)},
-            case erlang:is_process_alive(Pid) of
+            NewState = State#{accounts =>
+                              maybe_account_is_done(AccountId, Account#{jobs => NewJobs}, Accounts)
+                             },
+            case rpc:call(Node, 'erlang', 'is_process_alive', [Pid], ?RPC_CALL_TIMEOUT) of
                 'false' ->
+                    lager:debug("job ~s pid ~p is not alive, removing it from state"
+                               ,[JobId, Pid]
+                               ),
                     {'ok', NewState#{pids => maps:without([Pid], Pids)}, Pid};
                 'true' ->
-                    {'ok', NewState}
+                    lager:debug("job ~s pid ~p is still alive on node ~p", [JobId, Pid, Node]),
+                    {'ok', NewState, {'alive', Node, Pid}};
+                {'badrpc', Error} ->
+                    lager:debug("failed to query job ~s pid ~p aliveness on node ~p: ~p"
+                               ,[JobId, Pid, Node, Error]
+                               ),
+                    {'ok', NewState, {'badrpc', Node, Pid}}
             end;
         {'ok', {Account, _Job}} ->
             lager:debug("removing job ~s", [JobId]),
             NewJobs = maps:without([JobId], maps:get('jobs', Account, #{})),
-            State#{accounts => maybe_account_is_done(AccountId, Account#{jobs => NewJobs}, Accounts)};
+            {'ok'
+            ,State#{accounts => maybe_account_is_done(AccountId, Account#{jobs => NewJobs}, Accounts)}
+            ,'no_pid'
+            };
         {'error', 'not_found'} ->
             {'error', 'not_found'}
     end.
@@ -593,7 +618,7 @@ start_worker(AccountId, JobId, Ref) ->
 start_worker({AccountId, JobId, Ref}) ->
     lager:debug("starting worker for job ~s (account id: ~s)", [JobId, AccountId]),
     Node = rand_node(),
-    Reply = rpc:call(Node, 'fax_worker_sup', 'start_fax_job', [AccountId, JobId]),
+    Reply = rpc:call(Node, 'fax_worker_sup', 'start_fax_job', [AccountId, JobId], ?RPC_CALL_TIMEOUT),
     ra:process_command(id(), {'start_worker_result', {AccountId, JobId, Ref, Node, Reply}}).
 
 -spec available_nodes() -> list().
