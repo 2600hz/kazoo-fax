@@ -208,7 +208,14 @@ apply(#{index := _RaftIdx}
      ,'list_account_ids'
      ,State
      ) ->
-    {State, {'ok', maps:keys(maps:get('accounts', State, #{}))}};
+    {State, {'ok', maps:fold(fun(AccountId, Map, Acc) ->
+                                     Acc#{AccountId => maps:size(maps:get('jobs', Map, #{}))}
+                             end
+                            ,#{}
+                            ,maps:get('accounts', State, #{})
+                            )
+            }
+    };
 
 apply(#{index := _RaftIdx}
      ,'workers_count'
