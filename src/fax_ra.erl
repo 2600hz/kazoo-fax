@@ -158,7 +158,12 @@ apply(#{index := _RaftIdx}
      ) ->
     case find_account_in_state(AccountId, State) of
         {'ok', #{jobs := Jobs}} ->
-            {State, {'ok', Jobs}};
+            %% removing history as it can gets very big
+            Fun = fun(JobId, Job, Acc) ->
+                          Acc#{JobId => maps:without(['history'], Job)}
+                  end,
+            Map = maps:fold(Fun, #{}, Jobs),
+            {State, {'ok', Map}};
         _ ->
             {State, {'error', 'not_found'}}
     end;
@@ -169,6 +174,7 @@ apply(#{index := _RaftIdx}
     kz_log:put_callid(JobId),
     case get_account_job_from_state(AccountId, JobId, State) of
         {'ok', {_, Job}} ->
+            %% removing history as it can gets very big??
             {State, {'ok', Job}};
         _ ->
             {State, {'error', 'not_found'}}
