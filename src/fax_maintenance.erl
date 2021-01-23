@@ -31,6 +31,11 @@
         ,remove_account_stale_workers/1, remove_account_stale_workers/2
         ,remove_all_stale_workers/0, remove_all_stale_workers/1
         ,remove_single_stale_worker/2
+
+        ,force_remove_account_stale_workers/1, force_remove_account_stale_workers/2
+        ,force_remove_all_stale_workers/0, force_remove_all_stale_workers/1
+        ,force_remove_single_stale_worker/2
+
         ,worker_info/2
         ]).
 
@@ -503,7 +508,7 @@ remove_account_stale_workers(AccountId, Timestamp) ->
             'no_return';
         {'ok', Jobs} ->
             io:format("found ~b possible stale workers for account ~s", [length(Jobs), AccountId]),
-            remove_stale_workers(Jobs),
+            remove_stale_workers(fun fax_ra:remove_stale_worker/2, Jobs, []),
             'no_return';
         {'error', _Reason} ->
             io:format("failed to get stale workers for ~s: ~p~n", [AccountId, _Reason]),
@@ -522,7 +527,7 @@ remove_all_stale_workers(Timestamp) ->
     case get_locked_older_than([], TS) of
         {'ok', Jobs} ->
             io:format("found ~b possible stale workers", [length(Jobs)]),
-            remove_stale_workers(Jobs),
+            remove_stale_workers(fun fax_ra:remove_stale_worker/2, Jobs, []),
             'no_return';
         {'error', _Reason} ->
             io:format("failed to get possible stale workers: ~p", [_Reason]),
@@ -532,6 +537,58 @@ remove_all_stale_workers(Timestamp) ->
 -spec remove_single_stale_worker(kz_term:ne_binary(), kz_term:ne_binary()) -> 'no_return'.
 remove_single_stale_worker(AccountId, JobId) ->
     case fax_ra:remove_stale_worker(AccountId, JobId) of
+        {'ok', Job} ->
+            io:format("removed stale worker ~s with pid ~p", [JobId, maps:get('pid', Job, 'undefined')]),
+            'no_return';
+        {'error', _Reason} ->
+            io:format("failed to removed stale worker ~s: ~p", [JobId, _Reason]),
+            'no_return'
+    end.
+
+-spec force_remove_account_stale_workers(kz_term:ne_binary()) -> 'no_return'.
+force_remove_account_stale_workers(AccountId) ->
+    {{Year, Month, Day}, _} = calendar:gregorian_seconds_to_datetime(kz_time:now_s()),
+    Timestamp = calendar:datetime_to_gregorian_seconds({kz_date:normalize({Year, Month, Day - 1}), {0, 0, 0}}),
+    force_remove_account_stale_workers(AccountId, Timestamp).
+
+-spec force_remove_account_stale_workers(kz_term:ne_binary(), kz_term:ne_binary() | kz_time:gregorian_seconds()) -> 'no_return'.
+force_remove_account_stale_workers(AccountId, Timestamp) ->
+    TS = kz_term:to_integer(Timestamp),
+    case get_locked_older_than([{'key', AccountId}], TS) of
+        {'ok', []} ->
+            io:format("no stale workers found for account ~s~n", [AccountId]),
+            'no_return';
+        {'ok', Jobs} ->
+            io:format("found ~b possible stale workers for account ~s", [length(Jobs), AccountId]),
+            remove_stale_workers(fun fax_ra:force_remove_worker/2, Jobs, []),
+            'no_return';
+        {'error', _Reason} ->
+            io:format("failed to get stale workers for ~s: ~p~n", [AccountId, _Reason]),
+            'no_return'
+    end.
+
+-spec force_remove_all_stale_workers() -> 'no_return'.
+force_remove_all_stale_workers() ->
+    {{Year, Month, Day}, _} = calendar:gregorian_seconds_to_datetime(kz_time:now_s()),
+    Timestamp = calendar:datetime_to_gregorian_seconds({kz_date:normalize({Year, Month, Day - 1}), {0, 0, 0}}),
+    force_remove_all_stale_workers(Timestamp).
+
+-spec force_remove_all_stale_workers(kz_term:ne_binary()) -> 'no_return'.
+force_remove_all_stale_workers(Timestamp) ->
+    TS = kz_term:to_integer(Timestamp),
+    case get_locked_older_than([], TS) of
+        {'ok', Jobs} ->
+            io:format("found ~b possible stale workers", [length(Jobs)]),
+            remove_stale_workers(fun fax_ra:force_remove_worker/2, Jobs, []),
+            'no_return';
+        {'error', _Reason} ->
+            io:format("failed to get possible stale workers: ~p", [_Reason]),
+            'no_return'
+    end.
+
+-spec force_remove_single_stale_worker(kz_term:ne_binary(), kz_term:ne_binary()) -> 'no_return'.
+force_remove_single_stale_worker(AccountId, JobId) ->
+    case fax_ra:force_remove_worker(AccountId, JobId) of
         {'ok', Job} ->
             io:format("removed stale worker ~s with pid ~p", [JobId, maps:get('pid', Job, 'undefined')]),
             'no_return';
@@ -572,19 +629,16 @@ get_locked_older_than(ViewOptions, Timestamp) ->
     end.
 
 
-remove_stale_workers(Jobs) ->
-    remove_stale_workers(Jobs, []).
-
-remove_stale_workers([], []) ->
+remove_stale_workers(_, [], []) ->
     io:format("done.~n"),
     'no_return';
-remove_stale_workers([{AccountId, JobId} | Jobs], Acc) ->
+remove_stale_workers(RemoveFun, [{AccountId, JobId} | Jobs], Acc) ->
     io:format("removing ~s: ", [JobId]),
-    case fax_ra:remove_stale_worker(AccountId, JobId) of
+    case RemoveFun(AccountId, JobId) of
         {'ok', Job} ->
             io:format("~p removed~n", [maps:get('pid', Job, 'undefined')]),
-            remove_stale_workers(Jobs, [JobId | Acc]);
+            remove_stale_workers(RemoveFun, Jobs, [JobId | Acc]);
         {'error', _Error} ->
             io:format("failed to remove with error ~p~n", [_Error]),
-            remove_stale_workers(Jobs, Acc)
+            remove_stale_workers(RemoveFun, Jobs, Acc)
     end.
