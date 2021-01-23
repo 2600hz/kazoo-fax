@@ -350,7 +350,7 @@ apply(#{index := RaftIdx}
     kz_log:put_callid(JobId),
     {NewState, Effects0} = maybe_remove_pid_from_state(ForceKill, JobId, Job, State0),
     Effects = Effects0 ++ [{'release_cursor', RaftIdx, NewState}],
-    {'ok', NewState, Effects};
+    {NewState, 'ok', Effects};
 
 apply(#{index := RaftIdx}
      ,{'force_remove_pid', Pid}
