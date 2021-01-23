@@ -345,13 +345,13 @@ active_jobs() ->
 -spec restart_job(binary()) -> 'no_return'.
 restart_job(JobID) ->
     _ = case update_job(JobID, <<"pending">>) of
-            'ok' -> 'ok';
+            {'ok', _} -> 'ok';
             {'error',_}=E ->
                 lager:debug("restarting job ~p failed : ~p", [JobID, E])
         end,
     'no_return'.
 
--spec update_job(binary(), binary()) -> 'ok' | {'error', any()}.
+-spec update_job(binary(), binary()) -> {'ok', kz_json:object()} | {'error', any()}.
 update_job(JobID, State) ->
     case kz_datamgr:open_doc(?KZ_FAXES_DB, JobID) of
         {'error', _}=E -> E;
@@ -359,23 +359,22 @@ update_job(JobID, State) ->
             update_job(JobID, State, JObj)
     end.
 
--spec update_job(binary(), binary(), kz_json:object()) -> 'ok' | {'error', any()}.
+-spec update_job(binary(), binary(), kz_json:object()) -> {'ok', kz_json:object()} | {'error', any()}.
 update_job(JobID, State, JObj) ->
     case kz_json:get_value(<<"pvt_job_status">>, JObj) of
         State ->
             lager:debug("job ~s already in state ~s", [JobID, State]),
-            {'error', 'job_not_already_in_state'};
+            {'error', 'job_already_in_state'};
         _Other ->
             Opts = [{'rev', kz_doc:revision(JObj)}],
-            _ = kz_datamgr:save_doc(?KZ_FAXES_DB
-                                   ,kz_json:set_values([{<<"pvt_job_status">>, State}
-                                                       ,{<<"pvt_modified">>, kz_time:now_s()}
-                                                       ]
-                                                      ,JObj
-                                                      )
-                                   ,Opts
-                                   ),
-            'ok'
+            kz_datamgr:save_doc(?KZ_FAXES_DB
+                               ,kz_json:set_values([{<<"pvt_job_status">>, State}
+                                                   ,{<<"pvt_modified">>, kz_time:now_s()}
+                                                   ]
+                                                  ,JObj
+                                                  )
+                               ,Opts
+                               )
     end.
 
 -spec migrate_outbound_faxes() -> 'ok'.
@@ -469,7 +468,7 @@ load_smtp_attachment(DocId, Filename, FileContents) ->
     end.
 
 
--spec account_workers(AccountId::kz_term:ne_binary()) -> 'ok'.
+-spec account_workers(AccountId::kz_term:ne_binary()) -> 'no_return'.
 account_workers(AccountId) ->
     io:format("+--------------------------------------------+----------------------------------+----------------+~n", []),
     FormatString = "| ~-42s | ~-32s | ~-14s ~n",
@@ -630,6 +629,11 @@ get_locked_older_than(ViewOptions, Timestamp) ->
 
 
 remove_stale_workers(_, [], []) ->
+    io:format("done.~n"),
+    'no_return';
+remove_stale_workers(_, [], JobIds) ->
+    io:format("updating ~b jobs to pending", [length(JobIds)]),
+    _ = [update_job(JobId, <<"pending">>) || JobId <- JobIds],
     io:format("done.~n"),
     'no_return';
 remove_stale_workers(RemoveFun, [{AccountId, JobId} | Jobs], Acc) ->
