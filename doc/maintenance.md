@@ -9,12 +9,18 @@
 | `faxbox_jobs/1` | `(FaxboxId)` | |
 | `faxbox_jobs/2` | `(FaxboxId,State)` | |
 | `flush/0` |  | |
+| `force_exit_account_stale_workers/1` | `(AccountId)` | |
+| `force_exit_account_stale_workers/2` | `(AccountId,Timestamp)` | |
+| `force_exit_all_stale_workers/0` |  | |
+| `force_exit_all_stale_workers/1` | `(Timestamp)` | |
+| `force_exit_single_stale_worker/2` | `(AccountId,JobId)` | |
 | `force_remove_account_stale_workers/1` | `(AccountId)` | |
 | `force_remove_account_stale_workers/2` | `(AccountId,Timestamp)` | |
 | `force_remove_all_stale_workers/0` |  | |
 | `force_remove_all_stale_workers/1` | `(Timestamp)` | |
 | `force_remove_single_stale_worker/2` | `(AccountId,JobId)` | |
 | `load_smtp_attachment/2` | `(DocId,Filename)` | |
+| `locked_jobs/0` |  | |
 | `migrate/0` |  | |
 | `migrate/1` | `(Account) | ([]) | (_)` | |
 | `migrate/2` | `(Account,Options) | (Accounts,Option) | (Accounts,_) | ([],_) | (_,Options)` | |
@@ -81,6 +87,14 @@ sup fax_maintenance remove_single_stale_worker {ACCOUNT_ID} {JOB_ID}
 
 Same as their `remove_*` counterpart, but will forcefully removes worker from cluster state even its worker process is alive.
 
+## `force_exit_account_stale_workers/1`
+## `force_exit_account_stale_workers/2`
+## `force_exit_all_stale_workers/0`
+## `force_exit_all_stale_workers/1`
+## `force_exit_single_stale_worker/2`
+
+Same as their `force_remove_*` counterpart, but will forcefully exists the worker process if exists.
+
 ## `worker_info/2`
 
 Prints Pid and the node the worker is running.
@@ -101,3 +115,7 @@ Prints state of the number of workers and the number of accounts that being proc
 sup fax_ra workers_count
 {ok,[{workers_count,8},{account_counts,4}]}
 ```
+
+## `locked_jobs/0`
+
+List all locked jobs in database.

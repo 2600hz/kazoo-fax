@@ -25,7 +25,7 @@
 -export([restart_job/1 , update_job/2]).
 -export([account_jobs/1, account_jobs/2]).
 -export([faxbox_jobs/1, faxbox_jobs/2]).
--export([pending_jobs/0, active_jobs/0]).
+-export([pending_jobs/0, active_jobs/0, locked_jobs/0]).
 
 -export([account_workers/1
         ,remove_account_stale_workers/1, remove_account_stale_workers/2
@@ -35,6 +35,10 @@
         ,force_remove_account_stale_workers/1, force_remove_account_stale_workers/2
         ,force_remove_all_stale_workers/0, force_remove_all_stale_workers/1
         ,force_remove_single_stale_worker/2
+
+        ,force_exit_account_stale_workers/1, force_exit_account_stale_workers/2
+        ,force_exit_all_stale_workers/0, force_exit_all_stale_workers/1
+        ,force_exit_single_stale_worker/2
 
         ,worker_info/2
         ]).
@@ -596,6 +600,58 @@ force_remove_single_stale_worker(AccountId, JobId) ->
             'no_return'
     end.
 
+-spec force_exit_account_stale_workers(kz_term:ne_binary()) -> 'no_return'.
+force_exit_account_stale_workers(AccountId) ->
+    {{Year, Month, Day}, _} = calendar:gregorian_seconds_to_datetime(kz_time:now_s()),
+    Timestamp = calendar:datetime_to_gregorian_seconds({kz_date:normalize({Year, Month, Day - 1}), {0, 0, 0}}),
+    force_exit_account_stale_workers(AccountId, Timestamp).
+
+-spec force_exit_account_stale_workers(kz_term:ne_binary(), kz_term:ne_binary() | kz_time:gregorian_seconds()) -> 'no_return'.
+force_exit_account_stale_workers(AccountId, Timestamp) ->
+    TS = kz_term:to_integer(Timestamp),
+    case get_locked_older_than([{'key', AccountId}], TS) of
+        {'ok', []} ->
+            io:format("no stale workers found for account ~s~n", [AccountId]),
+            'no_return';
+        {'ok', Jobs} ->
+            io:format("found ~b possible stale workers for account ~s~n", [length(Jobs), AccountId]),
+            remove_stale_workers(fun fax_ra:kill_worker/2, Jobs, []),
+            'no_return';
+        {'error', _Reason} ->
+            io:format("failed to get stale workers for ~s: ~p~n", [AccountId, _Reason]),
+            'no_return'
+    end.
+
+-spec force_exit_all_stale_workers() -> 'no_return'.
+force_exit_all_stale_workers() ->
+    {{Year, Month, Day}, _} = calendar:gregorian_seconds_to_datetime(kz_time:now_s()),
+    Timestamp = calendar:datetime_to_gregorian_seconds({kz_date:normalize({Year, Month, Day - 1}), {0, 0, 0}}),
+    force_exit_all_stale_workers(Timestamp).
+
+-spec force_exit_all_stale_workers(kz_term:ne_binary()) -> 'no_return'.
+force_exit_all_stale_workers(Timestamp) ->
+    TS = kz_term:to_integer(Timestamp),
+    case get_locked_older_than([], TS) of
+        {'ok', Jobs} ->
+            io:format("found ~b possible stale workers~n", [length(Jobs)]),
+            remove_stale_workers(fun fax_ra:kill_worker/2, Jobs, []),
+            'no_return';
+        {'error', _Reason} ->
+            io:format("failed to get possible stale workers: ~p~n", [_Reason]),
+            'no_return'
+    end.
+
+-spec force_exit_single_stale_worker(kz_term:ne_binary(), kz_term:ne_binary()) -> 'no_return'.
+force_exit_single_stale_worker(AccountId, JobId) ->
+    case fax_ra:kill_worker(AccountId, JobId) of
+        {'ok', Job} ->
+            io:format("exited stale worker ~s with pid ~p~n", [JobId, maps:get('pid', Job, 'undefined')]),
+            'no_return';
+        {'error', _Reason} ->
+            io:format("failed to exit stale worker ~s: ~p~n", [JobId, _Reason]),
+            'no_return'
+    end.
+
 -spec worker_info(kz_term:ne_binary(), kz_term:ne_binary()) -> 'no_return'.
 worker_info(AccountId, JobId) ->
     case fax_ra:worker_info(AccountId, JobId) of
@@ -612,13 +668,35 @@ worker_info(AccountId, JobId) ->
             'no_return'
     end.
 
+-spec locked_jobs() -> 'no_return'.
+locked_jobs() ->
+    io:format("+----------------------------------+-------------------+----------------------------------+----------------------------------+----------------------+----------------------+~n", []),
+    FormatString = "| ~-32s | ~-17s | ~-32s | ~-32s | ~-20s | ~-20s |~n",
+    io:format(FormatString, [<<"Job">>, <<"Last modified">>, <<"Account">>, <<"FaxBox">>, <<"From">>, <<"To">>]),
+    io:format("+==================================+===================+==================================+==================================+======================+======================+~n", []),
+    _ = case kz_datamgr:get_results(?KZ_FAXES_DB, <<"faxes/locked_jobs_by_account">>) of
+            {'ok', Jobs} ->
+                [io:format(FormatString, [kz_json:get_value([<<"value">>, <<"id">>], JObj)
+                                         ,kz_time:format_datetime(
+                                            kz_json:get_value([<<"value">>, <<"modified">>], JObj))
+                                         ,kz_json:get_value([<<"value">>, <<"account_id">>], JObj)
+                                         ,kz_json:get_value([<<"value">>, <<"faxbox_id">>], JObj, <<"(none)">>)
+                                         ,kz_json:get_value([<<"value">>, <<"from">>], JObj)
+                                         ,kz_json:get_value([<<"value">>, <<"to">>], JObj)
+                                         ]) || JObj <- Jobs];
+            {'error', _Reason} ->
+                io:format("Error getting faxes~n", [])
+        end,
+    io:format("+----------------------------------+-------------------+----------------------------------+----------------------------------+----------------------+----------------------+~n", []),
+    'no_return'.
+
 -spec get_locked_older_than(kz_term:proplist(), kz_time:gregorian_seconds()) ->
           {'ok', [{kz_term:ne_binary(), kz_term:ne_binary()}]} |
           {'error', any()}.
 get_locked_older_than(ViewOptions, Timestamp) ->
     Now = kz_time:now_s(),
     OlderThan = Now - Timestamp,
-    case kz_datamgr:get_results(?KZ_FAXES_DB, ViewOptions) of
+    case kz_datamgr:get_results(?KZ_FAXES_DB, <<"faxes/locked_jobs_by_account">>, ViewOptions) of
         {'ok', JObjs} ->
             {'ok'
             ,[{kz_json:get_value([<<"value">>, <<"account_id">>], JObj), kz_doc:id(JObj)}
