@@ -49,6 +49,7 @@
         ,kill_worker/2
 
         ,worker_info/2
+        ,workers_count/0
         ]).
 
 -include("fax.hrl").
@@ -88,12 +89,6 @@
 account_workers(AccountId) ->
     process_command({'account_workers', AccountId}).
 
--spec worker_info(AccountId::kz_term:ne_binary(), JobId::kz_term:ne_binary()) ->
-          {'ok', Job::map()} |
-          {'error', 'timeout' | 'noproc' | 'not_found'}.
-worker_info(AccountId, JobId) ->
-    process_command({'worker_info', {AccountId, JobId}}).
-
 -spec remove_worker(AccountId::kz_term:ne_binary(), JobId::kz_term:ne_binary(), Reference::reference()) ->
           {'ok', Job::map()} |
           {'error', 'timeout' | 'noproc' | 'not_found'}.
@@ -111,6 +106,18 @@ remove_stale_worker(AccountId, JobId) ->
           {'error', 'timeout' | 'noproc' | 'not_found'}.
 force_remove_worker(AccountId, JobId) ->
     process_command({'force_remove_job', {AccountId, JobId}}).
+
+-spec worker_info(AccountId::kz_term:ne_binary(), JobId::kz_term:ne_binary()) ->
+          {'ok', Job::map()} |
+          {'error', 'timeout' | 'noproc' | 'not_found'}.
+worker_info(AccountId, JobId) ->
+    process_command({'worker_info', {AccountId, JobId}}).
+
+-spec workers_count() ->
+          {'ok', Counts::kz_term:proplist()} |
+          {'error', 'timeout' | 'noproc'}.
+workers_count() ->
+    process_command('workers_count').
 
 -spec kill_worker(AccountId::kz_term:ne_binary(), JobId::kz_term:ne_binary()) ->
           {'ok', Job::map()} |
@@ -167,6 +174,7 @@ apply(#{index := _RaftIdx}
         _ ->
             {State, {'error', 'not_found'}}
     end;
+
 apply(#{index := _RaftIdx}
      ,{'worker_info', {AccountId, JobId}}
      ,State
@@ -179,6 +187,16 @@ apply(#{index := _RaftIdx}
         _ ->
             {State, {'error', 'not_found'}}
     end;
+
+apply(#{index := _RaftIdx}
+     ,'workers_count'
+     ,State
+     ) ->
+    {State, {'ok', [{'pids_counts', maps:size(maps:get('pids', State, #{}))}
+                   ,{'account_counts', maps:size(maps:get('accounts', State, #{}))}
+                   ]
+            }
+    };
 
 apply(#{index := RaftIdx}
      ,{'down', Pid, 'normal'}
