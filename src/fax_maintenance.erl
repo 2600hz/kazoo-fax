@@ -612,6 +612,9 @@ worker_info(AccountId, JobId) ->
             'no_return'
     end.
 
+-spec get_locked_older_than(kz_term:proplist(), kz_time:gregorian_seconds()) ->
+          {'ok', [{kz_term:ne_binary(), kz_term:ne_binary()}]} |
+          {'error', any()}.
 get_locked_older_than(ViewOptions, Timestamp) ->
     Now = kz_time:now_s(),
     OlderThan = Now - Timestamp,
@@ -627,7 +630,8 @@ get_locked_older_than(ViewOptions, Timestamp) ->
             Error
     end.
 
-
+-spec remove_stale_workers(fun(), [{kz_term:ne_binary(), kz_term:ne_binary()}], kz_term:ne_binaries()) ->
+          'no_return'.
 remove_stale_workers(_, [], []) ->
     io:format("done.~n"),
     'no_return';

@@ -80,7 +80,7 @@
 -define(TICK_INTERVAL, 5 * ?MILLISECONDS_IN_SECOND).
 
 -define(RPC_CALL_TIMEOUT, 5 * ?MILLISECONDS_IN_SECOND).
--define(START_RETRY, 10 * ?MILLISECONDS_IN_SECOND).
+-define(START_RETRY, 5 * ?MILLISECONDS_IN_SECOND).
 
 
 -spec account_workers(AccountId::kz_term:ne_binary()) ->
@@ -136,10 +136,7 @@ process_command([Server | Servers], Cmd) ->
     case ra:process_command(Server, Cmd) of
         {'timeout', _} ->
             lager:warning("timeout on server ~p when processing command ~p", [Server, Cmd]),
-            %% idk why it always receive timeout althought I' getting
-            %% the reply in the shell.
-            %% process_command(Servers, Cmd);
-            {'error', 'timeout'};
+            process_command(Servers, Cmd);
         {'error', _Error} ->
             process_command(Servers, Cmd);
         {'ok', Reply, _ServerId} ->
