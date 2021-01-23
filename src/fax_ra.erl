@@ -628,7 +628,12 @@ state_enter('leader', #{pids := PMap}=State) ->
     Pids = maps:keys(PMap),
     Mons = [{'monitor', 'process', P} || P <- Pids],
     NodeMons = lists:usort([{'monitor', 'node', node(P)} || P <- Pids]),
-    Timers = [{'timer', TimerPayload, ?START_RETRY} || TimerPayload <- maps:get('restart_timers', State, [])],
+    Timers = maps:fold(fun(TimerPayload, _, Acc) ->
+                               [{'timer', {'start_retry', TimerPayload}, ?START_RETRY} | Acc]
+                       end
+                      ,[]
+                      ,maps:get('restart_timers', State, #{})
+                      ),
     Effects = Mons ++ NodeMons ++ Timers,
     Effects;
 state_enter(_, _) -> [].
