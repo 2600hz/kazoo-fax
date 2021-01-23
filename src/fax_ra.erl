@@ -298,14 +298,13 @@ apply(#{index := RaftIdx}
                     {'ok', State1, _} =
                         remove_job_from_account_state(AccountId, JobId, {Account, Job}, State0),
                     Effects = [{'demonitor', 'process', Pid}
-                              | {'release_cursor', RaftIdx, State1}
+                              ,{'release_cursor', RaftIdx, State1}
                               ],
                     {State1#{pids => maps:without([Pid], Pids)}, {'ok', Job}, Effects};
                 'no_pid' ->
                     {'ok', State1, _} =
                         remove_job_from_account_state(AccountId, JobId, {Account, Job}, State0),
-                    Effects = [{'release_cursor', RaftIdx, State1}
-                              ],
+                    Effects = [{'release_cursor', RaftIdx, State1}],
                     {State1, {'ok', Job}, Effects}
             end;
         {'error', 'not_found'}=Error ->
