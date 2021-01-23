@@ -272,14 +272,29 @@ apply(#{index := RaftIdx}
 
 apply(#{index := RaftIdx}
      ,{'remove_stale_worker', {AccountId, JobId}}
-     ,State0
+     ,#{pids := Pids} = State0
      ) ->
     kz_log:put_callid(JobId),
-    case maybe_remove_job_from_account_state(AccountId, JobId, State0) of
-        {'ok', State1, Job} ->
-            {NewState, Effects0} = maybe_remove_pid_from_state('false', JobId, Job, State1),
-            Effects = Effects0 ++ [{'release_cursor', RaftIdx, NewState}],
-            {NewState, {'ok', Job}, Effects};
+    case get_account_job_from_state(AccountId, JobId, State0) of
+        {'ok', {Account, Job}} ->
+            case is_worker_alive(Job) of
+                'true' ->
+                    {State0, {'error', 'process_is_alive'}};
+                'false' ->
+                    Pid = maps:get('pid', Job, 'undefined'),
+                    {'ok', State1, _} =
+                        remove_job_from_account_state(AccountId, JobId, {Account, Job}, State0),
+                    Effects = [{'demonitor', 'process', Pid}
+                              | {'release_cursor', RaftIdx, State1}
+                              ],
+                    {State1#{pids => maps:without([Pid], Pids)}, {'ok', Job}, Effects};
+                'no_pid' ->
+                    {'ok', State1, _} =
+                        remove_job_from_account_state(AccountId, JobId, {Account, Job}, State0),
+                    Effects = [{'release_cursor', RaftIdx, State1}
+                              ],
+                    {State1, {'ok', Job}, Effects}
+            end;
         {'error', 'not_found'}=Error ->
             {State0, Error}
     end;
@@ -512,11 +527,9 @@ remove_job_from_account_state(AccountId, JobId
 %% @private
 -spec maybe_remove_pid_from_state(boolean(), job_id(), map(), state()) ->
           {state(), ra_machine:effects()}.
-maybe_remove_pid_from_state(ShouldKill, _JobId
-                           ,#{pid := Pid, node := Node}
-                           ,#{pids := Pids}=State
-                           ) ->
-    case rpc:call(Node, 'erlang', 'is_process_alive', [Pid], ?RPC_CALL_TIMEOUT) of
+maybe_remove_pid_from_state(ShouldKill, _JobId, #{pid := Pid} = Job, #{pids := Pids}=State) ->
+    Node = maps:get('node', Job, node()),
+    case is_worker_alive(Job) of
         'false' ->
             lager:debug("job ~p is not alive, removing it from state", [Pid]),
             {State#{pids => maps:without([Pid], Pids)}, [{'demonitor', 'process', Pid}]};
@@ -533,12 +546,20 @@ maybe_remove_pid_from_state(ShouldKill, _JobId
                         ,[Pid, Node, KillResult]
                        ),
             {State, [{'demonitor', 'process', Pid}]};
-        {'badrpc', Error} ->
+        Error ->
             lager:debug("failed to query job ~p aliveness on node ~p, not removing pid: ~p"
                         ,[Pid, Node, Error]
                        ),
             {State, []}
-    end.
+    end;
+maybe_remove_pid_from_state(_, _, _Job, State) ->
+    lager:debug("job has no pid"),
+    {State, []}.
+
+is_worker_alive(#{pid := Pid}=Job) ->
+    rpc:call(maps:get('node', Job, node()), 'erlang', 'is_process_alive', [Pid], ?RPC_CALL_TIMEOUT);
+is_worker_alive(_) ->
+    'no_pid'.
 
 %% @private
 -spec find_account_in_state(kz_term:ne_binary(), state()) ->
