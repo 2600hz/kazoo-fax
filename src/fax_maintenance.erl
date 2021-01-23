@@ -1,5 +1,5 @@
 %%%-----------------------------------------------------------------------------
-%%% @copyright (C) 2012-2020, 2600Hz
+%%% @copyright (C) 2012-2021, 2600Hz
 %%% @doc
 %%% @author Luis Azedo
 %%%
@@ -26,6 +26,13 @@
 -export([account_jobs/1, account_jobs/2]).
 -export([faxbox_jobs/1, faxbox_jobs/2]).
 -export([pending_jobs/0, active_jobs/0]).
+
+-export([account_workers/1
+        ,remove_account_stale_workers/1, remove_account_stale_workers/2
+        ,remove_all_stale_workers/0, remove_all_stale_workers/1
+        ,remove_single_stale_worker/2
+        ,worker_info/2
+        ]).
 
 -export([load_smtp_attachment/2]).
 
@@ -454,4 +461,130 @@ load_smtp_attachment(DocId, Filename, FileContents) ->
                 {'error', E} -> io:format("error attaching ~s to docid ~s : ~p~n", [Filename, DocId, E])
             end;
         {'error', E} -> io:format("error opening docid ~s for attaching ~s : ~p~n", [DocId, Filename, E])
+    end.
+
+
+-spec account_workers(AccountId::kz_term:ne_binary()) -> 'ok'.
+account_workers(AccountId) ->
+    io:format("+----------------------+----------------------------------+------------+~n", []),
+    FormatString = "| ~-20s | ~-32s | ~-10s ~n",
+    io:format(FormatString, [<<"Node">>, <<"Job">>, <<"PID">>]),
+    io:format("+======================+==================================+============+~n", []),
+    _ = case fax_ra:account_workers(AccountId) of
+            {'ok', Jobs} ->
+                maps:fold(fun(JobId, Job, _) ->
+                                  io:format(FormatString, [maps:get('node', Job, 'undefined')
+                                                          ,JobId
+                                                          ,maps:get('pid', Job, 'undefined')
+                                                          ]
+                                           )
+                          end
+                         ,'ok'
+                         ,Jobs
+                         );
+            {'error', _Reason} ->
+                io:format("failed to find workers for account ~s: ~p~n", [AccountId, _Reason])
+        end,
+    io:format("+----------------------+----------------------------------+------------+~n", []),
+    'no_return'.
+
+-spec remove_account_stale_workers(kz_term:ne_binary()) -> 'no_return'.
+remove_account_stale_workers(AccountId) ->
+    {{Year, Month, Day}, _} = calendar:gregorian_seconds_to_datetime(kz_time:now_s()),
+    Timestamp = calendar:datetime_to_gregorian_seconds({kz_date:normalize({Year, Month, Day - 1}), {0, 0, 0}}),
+    remove_account_stale_workers(AccountId, Timestamp).
+
+-spec remove_account_stale_workers(kz_term:ne_binary(), kz_term:ne_binary() | kz_time:gregorian_seconds()) -> 'no_return'.
+remove_account_stale_workers(AccountId, Timestamp) ->
+    TS = kz_term:to_integer(Timestamp),
+    case get_locked_older_than([{'key', AccountId}], TS) of
+        {'ok', []} ->
+            io:format("no stale workers found for account ~s~n", [AccountId]),
+            'no_return';
+        {'ok', Jobs} ->
+            io:format("found ~b possible stale workers for account ~s", [length(Jobs), AccountId]),
+            remove_stale_workers(Jobs),
+            'no_return';
+        {'error', _Reason} ->
+            io:format("failed to get stale workers for ~s: ~p~n", [AccountId, _Reason]),
+            'no_return'
+    end.
+
+-spec remove_all_stale_workers() -> 'no_return'.
+remove_all_stale_workers() ->
+    {{Year, Month, Day}, _} = calendar:gregorian_seconds_to_datetime(kz_time:now_s()),
+    Timestamp = calendar:datetime_to_gregorian_seconds({kz_date:normalize({Year, Month, Day - 1}), {0, 0, 0}}),
+    remove_all_stale_workers(Timestamp).
+
+-spec remove_all_stale_workers(kz_term:ne_binary()) -> 'no_return'.
+remove_all_stale_workers(Timestamp) ->
+    TS = kz_term:to_integer(Timestamp),
+    case get_locked_older_than([], TS) of
+        {'ok', Jobs} ->
+            io:format("found ~b possible stale workers", [length(Jobs)]),
+            remove_stale_workers(Jobs),
+            'no_return';
+        {'error', _Reason} ->
+            io:format("failed to get possible stale workers: ~p", [_Reason]),
+            'no_return'
+    end.
+
+-spec remove_single_stale_worker(kz_term:ne_binary(), kz_term:ne_binary()) -> 'no_return'.
+remove_single_stale_worker(AccountId, JobId) ->
+    case fax_ra:remove_stale_worker(AccountId, JobId) of
+        {'ok', Job} ->
+            io:format("removed stale worker ~s with pid ~p", [JobId, maps:get('pid', Job, 'undefined')]),
+            'no_return';
+        {'error', _Reason} ->
+            io:format("failed to removed stale worker ~s: ~p", [JobId, _Reason]),
+            'no_return'
+    end.
+
+-spec worker_info(kz_term:ne_binary(), kz_term:ne_binary()) -> 'no_return'.
+worker_info(AccountId, JobId) ->
+    case fax_ra:remove_stale_worker(AccountId, JobId) of
+        {'ok', Job} ->
+            io:format("Removed~n~nJobId: ~s~nPID: ~pNode: ~p"
+                     ,[JobId
+                      ,maps:get('pid', Job, 'undefined')
+                      ,maps:get('node', Job, 'undefined')
+                      ]
+                     ),
+            'no_return';
+        {'error', _Reason} ->
+            io:format("failed to find worker ~s: ~p", [JobId, _Reason]),
+            'no_return'
+    end.
+
+get_locked_older_than(ViewOptions, Timestamp) ->
+    Now = kz_time:now_s(),
+    OlderThan = Now - Timestamp,
+    case kz_datamgr:get_results(?KZ_FAXES_DB, ViewOptions) of
+        {'ok', JObjs} ->
+            {'ok'
+            ,[{kz_json:get_value([<<"value">>, <<"account_id">>], JObj), kz_doc:id(JObj)}
+              || JObj <- JObjs,
+                 OlderThan =< Now - kz_json:get_integer_value([<<"value">>, <<"modified">>], JObj, 0)
+             ]
+            };
+        {'error', _}=Error ->
+            Error
+    end.
+
+
+remove_stale_workers(Jobs) ->
+    remove_stale_workers(Jobs, []).
+
+remove_stale_workers([], []) ->
+    io:format("done.~n"),
+    'no_return';
+remove_stale_workers([{AccountId, JobId} | Jobs], Acc) ->
+    io:format("removing ~s: ", [JobId]),
+    case fax_ra:remove_stale_worker(AccountId, JobId) of
+        {'ok', Job} ->
+            io:format("~p removed~n", [maps:get('pid', Job, 'undefined')]),
+            remove_stale_workers(Jobs, [JobId | Acc]);
+        {'error', _Error} ->
+            io:format("failed to remove with error ~p~n", [_Error]),
+            remove_stale_workers(Jobs, Acc)
     end.

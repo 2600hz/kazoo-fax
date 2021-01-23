@@ -41,13 +41,14 @@
         ]).
 
 
--export([account_jobs/1
-        ,remove_job/2
-        ,remove_stale_job/2
-        ,kill_job/2
-        ,job_info/2
+-export([account_workers/1
+        ,remove_worker/3
+        ,remove_stale_worker/2
 
-        ,process_command/1
+        ,force_remove_worker/2
+        ,kill_worker/2
+
+        ,worker_info/2
         ]).
 
 -include("fax.hrl").
@@ -74,35 +75,41 @@
 -define(START_RETRY, 10 * ?MILLISECONDS_IN_SECOND).
 
 
--spec account_jobs(AccountId::kz_term:ne_binary()) ->
+-spec account_workers(AccountId::kz_term:ne_binary()) ->
          {'ok', Jobs::map()} |
          {'error', 'timeout' | 'noproc' | 'not_found'}.
-account_jobs(AccountId) ->
-    process_command({'account_jobs', AccountId}).
+account_workers(AccountId) ->
+    process_command({'account_workers', AccountId}).
 
--spec job_info(AccountId::kz_term:ne_binary(), JobId::kz_term:ne_binary()) ->
+-spec worker_info(AccountId::kz_term:ne_binary(), JobId::kz_term:ne_binary()) ->
          {'ok', Job::map()} |
          {'error', 'timeout' | 'noproc' | 'not_found'}.
-job_info(AccountId, JobId) ->
-    process_command({'job_info', {AccountId, JobId}}).
+worker_info(AccountId, JobId) ->
+    process_command({'worker_info', {AccountId, JobId}}).
 
--spec remove_job(AccountId::kz_term:ne_binary(), JobId::kz_term:ne_binary()) ->
+-spec remove_worker(AccountId::kz_term:ne_binary(), JobId::kz_term:ne_binary(), Reference::reference()) ->
          {'ok', Job::map()} |
          {'error', 'timeout' | 'noproc' | 'not_found'}.
-remove_job(AccountId, JobId) ->
-    process_command({'remove_job', {AccountId, JobId}}).
+remove_worker(AccountId, JobId, Reference) ->
+    process_command({'remove_job', {AccountId, JobId, Reference}}).
 
--spec remove_stale_job(AccountId::kz_term:ne_binary(), JobId::kz_term:ne_binary()) ->
+-spec remove_stale_worker(AccountId::kz_term:ne_binary(), JobId::kz_term:ne_binary()) ->
          {'ok', Job::map()} |
          {'error', 'timeout' | 'noproc' | 'not_found'}.
-remove_stale_job(AccountId, JobId) ->
-    process_command({'remove_stale_job', {AccountId, JobId}}).
+remove_stale_worker(AccountId, JobId) ->
+    process_command({'remove_stale_worker', {AccountId, JobId}}).
 
--spec kill_job(AccountId::kz_term:ne_binary(), JobId::kz_term:ne_binary()) ->
+-spec force_remove_worker(AccountId::kz_term:ne_binary(), JobId::kz_term:ne_binary()) ->
          {'ok', Job::map()} |
          {'error', 'timeout' | 'noproc' | 'not_found'}.
-kill_job(AccountId, JobId) ->
-    process_command({'kill_job', {AccountId, JobId}}).
+force_remove_worker(AccountId, JobId) ->
+    process_command({'force_remove_job', {AccountId, JobId}}).
+
+-spec kill_worker(AccountId::kz_term:ne_binary(), JobId::kz_term:ne_binary()) ->
+         {'ok', Job::map()} |
+         {'error', 'timeout' | 'noproc' | 'not_found'}.
+kill_worker(AccountId, JobId) ->
+    process_command({'kill_worker', {AccountId, JobId}}).
 
 %% @private
 -spec process_command(any()) -> any().
@@ -139,7 +146,7 @@ init(#{name := Name}) ->
           {state(), Reply :: term()}.
 
 apply(#{index := _RaftIdx}
-     ,{'account_jobs', AccountId}
+     ,{'account_workers', AccountId}
      ,State
      ) ->
     case find_account_in_state(AccountId, State) of
@@ -149,7 +156,7 @@ apply(#{index := _RaftIdx}
             {State, {'error', 'not_found'}}
     end;
 apply(#{index := _RaftIdx}
-     ,{'job_info', {AccountId, JobId}}
+     ,{'worker_info', {AccountId, JobId}}
      ,State
      ) ->
     kz_log:put_callid(JobId),
@@ -227,7 +234,7 @@ apply(#{index := RaftIdx}
     end;
 
 apply(#{index := RaftIdx}
-     ,{'remove_pid', {ForceKill, JobId, Job}}
+     ,{'force_remove_pid', {ForceKill, JobId, Job}}
      ,State0
      ) ->
     kz_log:put_callid(JobId),
@@ -250,7 +257,7 @@ apply(#{index := RaftIdx}
     end;
 
 apply(#{index := RaftIdx}
-     ,{'remove_stale_job', {AccountId, JobId}}
+     ,{'force_remove_job', {AccountId, JobId}}
      ,State0
      ) ->
     kz_log:put_callid(JobId),
@@ -264,7 +271,21 @@ apply(#{index := RaftIdx}
     end;
 
 apply(#{index := RaftIdx}
-     ,{'kill_job', {AccountId, JobId}}
+     ,{'remove_stale_worker', {AccountId, JobId}}
+     ,State0
+     ) ->
+    kz_log:put_callid(JobId),
+    case maybe_remove_job_from_account_state(AccountId, JobId, State0) of
+        {'ok', State1, Job} ->
+            {NewState, Effects0} = maybe_remove_pid_from_state('false', JobId, Job, State1),
+            Effects = Effects0 ++ [{'release_cursor', RaftIdx, NewState}],
+            {NewState, {'ok', Job}, Effects};
+        {'error', 'not_found'}=Error ->
+            {State0, Error}
+    end;
+
+apply(#{index := RaftIdx}
+     ,{'kill_worker', {AccountId, JobId}}
      ,State0
      ) ->
     kz_log:put_callid(JobId),
@@ -364,7 +385,7 @@ apply(Meta
      ,State
      ) ->
     kz_log:put_callid(JobId),
-    lager:debug("job ~s is already started with pid ~p", [JobId, Pid]),
+    lager:debug("pid ~p is already started", [Pid]),
     apply(Meta, {'start_worker_result', {AccountId, JobId, Ref, Node, {'ok', Pid}}}, State);
 
 apply(#{index := RaftIdx}
