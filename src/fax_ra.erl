@@ -76,38 +76,38 @@
 
 
 -spec account_workers(AccountId::kz_term:ne_binary()) ->
-         {'ok', Jobs::map()} |
-         {'error', 'timeout' | 'noproc' | 'not_found'}.
+          {'ok', Jobs::map()} |
+          {'error', 'timeout' | 'noproc' | 'not_found'}.
 account_workers(AccountId) ->
     process_command({'account_workers', AccountId}).
 
 -spec worker_info(AccountId::kz_term:ne_binary(), JobId::kz_term:ne_binary()) ->
-         {'ok', Job::map()} |
-         {'error', 'timeout' | 'noproc' | 'not_found'}.
+          {'ok', Job::map()} |
+          {'error', 'timeout' | 'noproc' | 'not_found'}.
 worker_info(AccountId, JobId) ->
     process_command({'worker_info', {AccountId, JobId}}).
 
 -spec remove_worker(AccountId::kz_term:ne_binary(), JobId::kz_term:ne_binary(), Reference::reference()) ->
-         {'ok', Job::map()} |
-         {'error', 'timeout' | 'noproc' | 'not_found'}.
+          {'ok', Job::map()} |
+          {'error', 'timeout' | 'noproc' | 'not_found'}.
 remove_worker(AccountId, JobId, Reference) ->
     process_command({'remove_job', {AccountId, JobId, Reference}}).
 
 -spec remove_stale_worker(AccountId::kz_term:ne_binary(), JobId::kz_term:ne_binary()) ->
-         {'ok', Job::map()} |
-         {'error', 'timeout' | 'noproc' | 'not_found'}.
+          {'ok', Job::map()} |
+          {'error', 'timeout' | 'noproc' | 'not_found'}.
 remove_stale_worker(AccountId, JobId) ->
     process_command({'remove_stale_worker', {AccountId, JobId}}).
 
 -spec force_remove_worker(AccountId::kz_term:ne_binary(), JobId::kz_term:ne_binary()) ->
-         {'ok', Job::map()} |
-         {'error', 'timeout' | 'noproc' | 'not_found'}.
+          {'ok', Job::map()} |
+          {'error', 'timeout' | 'noproc' | 'not_found'}.
 force_remove_worker(AccountId, JobId) ->
     process_command({'force_remove_job', {AccountId, JobId}}).
 
 -spec kill_worker(AccountId::kz_term:ne_binary(), JobId::kz_term:ne_binary()) ->
-         {'ok', Job::map()} |
-         {'error', 'timeout' | 'noproc' | 'not_found'}.
+          {'ok', Job::map()} |
+          {'error', 'timeout' | 'noproc' | 'not_found'}.
 kill_worker(AccountId, JobId) ->
     process_command({'kill_worker', {AccountId, JobId}}).
 
@@ -520,7 +520,7 @@ remove_job_from_account_state(AccountId, JobId
     lager:debug("removing job ~s", [JobId]),
     NewJobs = maps:without([JobId], maps:get('jobs', Account, #{})),
     NewState = State#{accounts =>
-                      maybe_account_is_done(AccountId, Account#{jobs => NewJobs}, Accounts)
+                          maybe_account_is_done(AccountId, Account#{jobs => NewJobs}, Accounts)
                      },
     {'ok', NewState, Job}.
 
@@ -543,12 +543,12 @@ maybe_remove_pid_from_state(ShouldKill, _JobId, #{pid := Pid} = Job, #{pids := P
         {'badrpc', _} when ShouldKill ->
             KillResult = rpc:call(Node, 'supervisor', 'terminate_child', ['fax_worker_sup', Pid]),
             lager:debug("failed to query job ~p aliveness on node ~p, force exiting it result in ~p"
-                        ,[Pid, Node, KillResult]
+                       ,[Pid, Node, KillResult]
                        ),
             {State, [{'demonitor', 'process', Pid}]};
         Error ->
             lager:debug("failed to query job ~p aliveness on node ~p, not removing pid: ~p"
-                        ,[Pid, Node, Error]
+                       ,[Pid, Node, Error]
                        ),
             {State, []}
     end;
