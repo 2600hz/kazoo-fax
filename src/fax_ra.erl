@@ -50,6 +50,10 @@
 
         ,worker_info/2
         ,workers_count/0
+
+        ,list_account_ids/0
+        ,list_pids/0
+        ,pid_info/1
         ]).
 
 %% Internal
@@ -64,9 +68,12 @@
 -type start_worker_ret() :: kz_types:startlink_ret() | {'badrpc', any()}.
 
 -type command() :: {'account_workers', account_id()} |
+                   'list_account_ids' |
+                   'list_pids' |
                    {'force_remove_job', {boolean(), account_id(), job_id()}} |
                    {'force_remove_pid', pid()} |
                    {'force_remove_pid', {ForceKill::boolean(), job_id(), Job::map()}} |
+                   {'pid_info', pid()} |
                    {'remove_job', {account_id(), job_id(), reference()}} |
                    {'remove_stale_worker', {account_id(), job_id()}} |
                    {'restart_job', {account_id(), job_id(), OldRef::reference(), NewRef::reference()}} |
@@ -125,6 +132,15 @@ workers_count() ->
 kill_worker(AccountId, JobId) ->
     process_command({'force_remove_job', {'true', AccountId, JobId}}).
 
+-spec list_pids() -> [pid()].
+list_pids() -> process_command('list_pids').
+
+-spec pid_info(pid()) -> map().
+pid_info(Pid) -> process_command({'pid_info', Pid}).
+
+-spec list_account_ids() -> kz_term:ne_binaries().
+list_account_ids() -> process_command('list_account_ids').
+
 %% @private
 -spec process_command(any()) -> any().
 process_command(Cmd) ->
@@ -174,10 +190,31 @@ apply(#{index := _RaftIdx}
     end;
 
 apply(#{index := _RaftIdx}
+     ,{'pid_info', Pid}
+     ,#{'pids' := Pids} = State
+     ) ->
+    case maps:get(Pid, Pids, 'undefined') of
+        'undefined' -> {State, {'error', 'not_found'}};
+        Map -> {State, {'ok', Map}}
+    end;
+
+apply(#{index := _RaftIdx}
+     ,'list_pids'
+     ,State
+     ) ->
+    {State, {'ok', maps:keys(maps:get('pids', State, #{}))}};
+
+apply(#{index := _RaftIdx}
+     ,'list_account_ids'
+     ,State
+     ) ->
+    {State, {'ok', maps:keys(maps:get('accounts', State, #{}))}};
+
+apply(#{index := _RaftIdx}
      ,'workers_count'
      ,State
      ) ->
-    {State, {'ok', [{'pids_counts', maps:size(maps:get('pids', State, #{}))}
+    {State, {'ok', [{'worker_counts', maps:size(maps:get('pids', State, #{}))}
                    ,{'account_counts', maps:size(maps:get('accounts', State, #{}))}
                    ]
             }

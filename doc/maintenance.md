@@ -99,5 +99,5 @@ Prints state of the number of workers and the number of accounts that being proc
 
 ```bash
 sup fax_ra workers_count
-{ok,[{process_counts,8},{account_counts,4}]}
+{ok,[{workers_count,8},{account_counts,4}]}
 ```
