@@ -61,10 +61,9 @@
 -type start_worker_ret() :: kz_types:startlink_ret() | {'badrpc', any()}.
 
 -type command() :: {'account_workers', account_id()} |
-                   {'force_remove_job', {account_id(), job_id()}} |
+                   {'force_remove_job', {boolean(), account_id(), job_id()}} |
                    {'force_remove_pid', pid()} |
                    {'force_remove_pid', {ForceKill::boolean(), job_id(), Job::map()}} |
-                   {'kill_worker', {account_id(), job_id()}} |
                    {'remove_job', {account_id(), job_id(), reference()}} |
                    {'remove_stale_worker', {account_id(), job_id()}} |
                    {'restart_job', {account_id(), job_id(), OldRef::reference(), NewRef::reference()}} |
@@ -105,7 +104,7 @@ remove_stale_worker(AccountId, JobId) ->
           {'ok', Job::map()} |
           {'error', 'timeout' | 'noproc' | 'not_found'}.
 force_remove_worker(AccountId, JobId) ->
-    process_command({'force_remove_job', {AccountId, JobId}}).
+    process_command({'force_remove_job', {'false', AccountId, JobId}}).
 
 -spec worker_info(AccountId::kz_term:ne_binary(), JobId::kz_term:ne_binary()) ->
           {'ok', Job::map()} |
@@ -123,22 +122,16 @@ workers_count() ->
           {'ok', Job::map()} |
           {'error', 'timeout' | 'noproc' | 'not_found'}.
 kill_worker(AccountId, JobId) ->
-    process_command({'kill_worker', {AccountId, JobId}}).
+    process_command({'force_remove_job', {'true', AccountId, JobId}}).
 
 %% @private
 -spec process_command(any()) -> any().
 process_command(Cmd) ->
-    process_command(members(), Cmd).
-
-process_command([], _Cmd) ->
-    {'error', 'server_unavailable'};
-process_command([Server | Servers], Cmd) ->
-    case ra:process_command(Server, Cmd) of
+    case ra:process_command(ra_name(), Cmd) of
         {'timeout', _} ->
-            lager:warning("timeout on server ~p when processing command ~p", [Server, Cmd]),
-            process_command(Servers, Cmd);
-        {'error', _Error} ->
-            process_command(Servers, Cmd);
+            {'error', 'timeout'};
+        {'error', _}=Error ->
+            Error;
         {'ok', Reply, _ServerId} ->
             Reply
     end.
@@ -162,12 +155,7 @@ apply(#{index := _RaftIdx}
      ) ->
     case find_account_in_state(AccountId, State) of
         {'ok', #{jobs := Jobs}} ->
-            %% removing history as it can gets very big
-            Fun = fun(JobId, Job, Acc) ->
-                          Acc#{JobId => maps:without(['history'], Job)}
-                  end,
-            Map = maps:fold(Fun, #{}, Jobs),
-            {State, {'ok', Map}};
+            {State, {'ok', Jobs}};
         _ ->
             {State, {'error', 'not_found'}}
     end;
@@ -179,7 +167,6 @@ apply(#{index := _RaftIdx}
     kz_log:put_callid(JobId),
     case get_account_job_from_state(AccountId, JobId, State) of
         {'ok', {_, Job}} ->
-            %% removing history as it can gets very big??
             {State, {'ok', Job}};
         _ ->
             {State, {'error', 'not_found'}}
@@ -264,15 +251,6 @@ apply(#{index := RaftIdx}
     end;
 
 apply(#{index := RaftIdx}
-     ,{'force_remove_pid', {ForceKill, JobId, Job}}
-     ,State0
-     ) ->
-    kz_log:put_callid(JobId),
-    {NewState, Effects0} = maybe_remove_pid_from_state(ForceKill, JobId, Job, State0),
-    Effects = Effects0 ++ [{'release_cursor', RaftIdx, NewState}],
-    {'ok', NewState, Effects};
-
-apply(#{index := RaftIdx}
      ,{'remove_job', {AccountId, JobId, Ref}}
      ,State0
      ) ->
@@ -287,13 +265,13 @@ apply(#{index := RaftIdx}
     end;
 
 apply(#{index := RaftIdx}
-     ,{'force_remove_job', {AccountId, JobId}}
+     ,{'force_remove_job', {ForceKill, AccountId, JobId}}
      ,State0
      ) ->
     kz_log:put_callid(JobId),
     case maybe_remove_job_from_account_state(AccountId, JobId, State0) of
         {'ok', State1, Job} ->
-            {NewState, Effects0} = maybe_remove_pid_from_state('false', JobId, Job, State1),
+            {NewState, Effects0} = maybe_remove_pid_from_state(ForceKill, JobId, Job, State1),
             Effects = Effects0 ++ [{'release_cursor', RaftIdx, NewState}],
             {NewState, {'ok', Job}, Effects};
         {'error', 'not_found'}=Error ->
@@ -322,25 +300,22 @@ apply(#{index := RaftIdx}
                     {'ok', State1, _} =
                         remove_job_from_account_state(AccountId, JobId, {Account, Job}, State0),
                     Effects = [{'release_cursor', RaftIdx, State1}],
-                    {State1, {'ok', Job}, Effects}
+                    {State1, {'ok', Job}, Effects};
+                {'badrpc', _}=Bad ->
+                    {State0, Bad}
             end;
         {'error', 'not_found'}=Error ->
             {State0, Error}
     end;
 
 apply(#{index := RaftIdx}
-     ,{'kill_worker', {AccountId, JobId}}
+     ,{'force_remove_pid', {ForceKill, JobId, Job}}
      ,State0
      ) ->
     kz_log:put_callid(JobId),
-    case maybe_remove_job_from_account_state(AccountId, JobId, State0) of
-        {'ok', State1, Job} ->
-            {NewState, Effects0} = maybe_remove_pid_from_state('true', JobId, Job, State1),
-            Effects = Effects0 ++ [{'release_cursor', RaftIdx, NewState}],
-            {NewState, {'ok', Job}, Effects};
-        {'error', 'not_found'}=Error ->
-            {State0, Error}
-    end;
+    {NewState, Effects0} = maybe_remove_pid_from_state(ForceKill, JobId, Job, State0),
+    Effects = Effects0 ++ [{'release_cursor', RaftIdx, NewState}],
+    {'ok', NewState, Effects};
 
 apply(#{index := RaftIdx}
      ,{'force_remove_pid', Pid}
@@ -511,7 +486,7 @@ apply(#{index := RaftIdx}
     end;
 
 apply(_Meta, _Msg, State) ->
-    lager:debug("recieved unknown command: ~p", [_Msg]),
+    lager:debug("received unknown command: ~p", [_Msg]),
     {State, {'error', 'unknown_command'}, []}.
 
 %% @private
@@ -575,12 +550,6 @@ maybe_remove_pid_from_state(ShouldKill, _JobId, #{pid := Pid} = Job, #{pids := P
         'true' ->
             lager:debug("job ~p is still alive, not removing pid", [Pid]),
             {State, []};
-        {'badrpc', _} when ShouldKill ->
-            KillResult = rpc:call(Node, 'supervisor', 'terminate_child', ['fax_worker_sup', Pid]),
-            lager:debug("failed to query job ~p aliveness on node ~p, force exiting it result in ~p"
-                       ,[Pid, Node, KillResult]
-                       ),
-            {State, [{'demonitor', 'process', Pid}]};
         Error ->
             lager:debug("failed to query job ~p aliveness on node ~p, not removing pid: ~p"
                        ,[Pid, Node, Error]
@@ -863,7 +832,7 @@ start_worker(AccountId, JobId, Ref) ->
     kz_process:spawn(fun start_worker/1 , [{AccountId, JobId, Ref}]).
 
 start_worker({AccountId, JobId, Ref}) ->
-    %% lager:debug("starting worker for job ~s (account id: ~s)", [JobId, AccountId]),
+    lager:debug("starting worker for job ~s (account id: ~s)", [JobId, AccountId]),
     Node = rand_node(),
     Reply = rpc:call(Node, 'fax_worker_sup', 'start_fax_job', [AccountId, JobId], ?RPC_CALL_TIMEOUT),
     ra:process_command(id(), {'start_worker_result', {AccountId, JobId, Ref, Node, Reply}}).
