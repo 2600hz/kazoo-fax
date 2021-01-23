@@ -59,11 +59,18 @@
 -type account_id() :: kz_term:ne_binary().
 -type start_worker_ret() :: kz_types:startlink_ret() | {'badrpc', any()}.
 
--type command() :: {'remove_job', {account_id(), job_id(), reference()}} |
+-type command() :: {'account_workers', account_id()} |
+                   {'force_remove_job', {account_id(), job_id()}} |
+                   {'force_remove_pid', pid()} |
+                   {'force_remove_pid', {ForceKill::boolean(), job_id(), Job::map()}} |
+                   {'kill_worker', {account_id(), job_id()}} |
+                   {'remove_job', {account_id(), job_id(), reference()}} |
+                   {'remove_stale_worker', {account_id(), job_id()}} |
                    {'restart_job', {account_id(), job_id(), OldRef::reference(), NewRef::reference()}} |
-                   {'timeout', {'start_retry', {account_id(), job_id(), reference()}}} |
                    {'start_worker', {account_id(), job_id(), reference()}} |
                    {'start_worker_result', {account_id(), job_id(), reference(), node(), start_worker_ret()}} |
+                   {'timeout', {'start_retry', {account_id(), job_id(), reference()}}} |
+                   {'worker_info', {account_id(), job_id()}} |
                    ra_machine:effect().
 
 -define(DEFAULT_LIMITS(AccountId)
