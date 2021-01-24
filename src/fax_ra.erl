@@ -40,20 +40,22 @@
         ,available_nodes/0
         ]).
 
-%% Handy accessors and commands
--export([account_workers/1
-        ,remove_worker/3
+%% Handy commands
+-export([remove_worker/3
         ,remove_stale_worker/2
 
         ,force_remove_worker/2
         ,kill_worker/2
+        ]).
 
-        ,worker_info/2
+%% Handy queries
+-export([list_account_ids/0
+        ,list_pids/0
         ,workers_count/0
 
-        ,list_account_ids/0
-        ,list_pids/0
+        ,account_workers/1
         ,pid_info/1
+        ,worker_info/2
         ]).
 
 %% Internal
@@ -67,19 +69,14 @@
 -type account_id() :: kz_term:ne_binary().
 -type start_worker_ret() :: kz_types:startlink_ret() | {'badrpc', any()}.
 
--type command() :: {'account_workers', account_id()} |
-                   'list_account_ids' |
-                   'list_pids' |
-                   {'force_remove_job', {boolean(), account_id(), job_id()}} |
+-type command() :: {'force_remove_job', {boolean(), account_id(), job_id()}} |
                    {'force_remove_pid', pid()} |
                    {'force_remove_pid', {ForceKill::boolean(), job_id(), Job::map()}} |
-                   {'pid_info', pid()} |
                    {'remove_job', {account_id(), job_id(), reference()}} |
                    {'remove_stale_worker', {account_id(), job_id()}} |
                    {'restart_job', {account_id(), job_id(), OldRef::reference(), NewRef::reference()}} |
                    {'start_worker', {account_id(), job_id(), reference()}} |
                    {'start_worker_result', {account_id(), job_id(), reference(), node(), start_worker_ret()}} |
-                   {'worker_info', {account_id(), job_id()}} |
                    ra_machine:effect().
 
 -define(DEFAULT_LIMITS(AccountId)
@@ -89,13 +86,14 @@
 
 -define(RPC_CALL_TIMEOUT, 5 * ?MILLISECONDS_IN_SECOND).
 
+%%%=============================================================================
+%%% Command functions
+%%%=============================================================================
 
--spec account_workers(AccountId::kz_term:ne_binary()) ->
-          {'ok', Jobs::map()} |
-          {'error', 'timeout' | 'noproc' | 'not_found'}.
-account_workers(AccountId) ->
-    process_command({'account_workers', AccountId}).
-
+%%------------------------------------------------------------------------------
+%% @doc
+%% @end
+%%------------------------------------------------------------------------------
 -spec remove_worker(AccountId::kz_term:ne_binary(), JobId::kz_term:ne_binary(), Reference::reference()) ->
           {'ok', Job::map()} |
           {'error', 'timeout' | 'noproc' | 'not_found'}.
@@ -114,45 +112,102 @@ remove_stale_worker(AccountId, JobId) ->
 force_remove_worker(AccountId, JobId) ->
     process_command({'force_remove_job', {'false', AccountId, JobId}}).
 
--spec worker_info(AccountId::kz_term:ne_binary(), JobId::kz_term:ne_binary()) ->
-          {'ok', Job::map()} |
-          {'error', 'timeout' | 'noproc' | 'not_found'}.
-worker_info(AccountId, JobId) ->
-    process_command({'worker_info', {AccountId, JobId}}).
-
--spec workers_count() ->
-          {'ok', Counts::kz_term:proplist()} |
-          {'error', 'timeout' | 'noproc'}.
-workers_count() ->
-    process_command('workers_count').
-
 -spec kill_worker(AccountId::kz_term:ne_binary(), JobId::kz_term:ne_binary()) ->
           {'ok', Job::map()} |
           {'error', 'timeout' | 'noproc' | 'not_found'}.
 kill_worker(AccountId, JobId) ->
     process_command({'force_remove_job', {'true', AccountId, JobId}}).
 
--spec list_pids() -> [pid()].
-list_pids() -> process_command('list_pids').
+%%%=============================================================================
+%%% Query functions
+%%%=============================================================================
 
--spec pid_info(pid()) -> map().
-pid_info(Pid) -> process_command({'pid_info', Pid}).
+%%------------------------------------------------------------------------------
+%% @doc
+%% @end
+%%------------------------------------------------------------------------------
+-spec list_account_ids() ->
+          {'ok', map()} |
+          {'error', any()}.
+list_account_ids() ->
+    query_state(
+      fun(State) ->
+              Fold = fun(AccountId, Map, Acc) ->
+                             Acc#{AccountId => maps:size(maps:get('jobs', Map, #{}))}
+                     end,
+              {'ok', maps:fold(Fold, #{}, maps:get('accounts', State, #{}))}
+      end
+     ).
 
--spec list_account_ids() -> kz_term:ne_binaries().
-list_account_ids() -> process_command('list_account_ids').
+-spec list_pids() ->
+          {'ok', [pid()]} |
+          {'error', any()}.
+list_pids() ->
+    query_state(
+      fun(State) ->
+              {'ok', maps:keys(maps:get('pids', State, #{}))}
+      end
+     ).
 
-%% @private
--spec process_command(any()) -> any().
-process_command(Cmd) ->
-    case ra:process_command(ra_name(), Cmd) of
-        {'timeout', _} ->
-            {'error', 'timeout'};
-        {'error', _}=Error ->
-            Error;
-        {'ok', Reply, _ServerId} ->
-            Reply
-    end.
+-spec workers_count() ->
+          {'ok', Counts::kz_term:proplist()} |
+          {'error', 'timeout' | 'noproc'}.
+workers_count() ->
+    query_state(
+      fun(State) ->
+              {'ok', [{'worker_counts', maps:size(maps:get('pids', State, #{}))}
+                     ,{'account_counts', maps:size(maps:get('accounts', State, #{}))}
+                     ]
+              }
+      end
+     ).
 
+-spec account_workers(AccountId::kz_term:ne_binary()) ->
+          {'ok', Jobs::map()} |
+          {'error', 'timeout' | 'noproc' | 'not_found'}.
+account_workers(AccountId) ->
+    query_state(
+      fun(State) ->
+              case find_account_in_state(AccountId, State) of
+                  {'ok', Account} ->
+                      {'ok', maps:get('jobs', Account, #{})};
+                  Result -> Result
+              end
+      end
+     ).
+
+-spec pid_info(pid()) ->
+          {'ok', Jobs::map()} |
+          {'error', 'timeout' | 'noproc' | 'not_found'}.
+pid_info(Pid) ->
+    query_state(
+      fun(#{'pids' := Pids}) ->
+              case maps:get(Pid, Pids, 'undefined') of
+                  'undefined' -> {'error', 'not_found'};
+                  Map -> {'ok', Map}
+              end
+      end
+     ).
+
+-spec worker_info(AccountId::kz_term:ne_binary(), JobId::kz_term:ne_binary()) ->
+          {'ok', Job::map()} |
+          {'error', 'timeout' | 'noproc' | 'not_found'}.
+worker_info(AccountId, JobId) ->
+    query_state(
+      fun(State) ->
+              case get_account_job_from_state(AccountId, JobId, State) of
+                  {'ok', {_, Job}} ->
+                      {'ok', Job};
+                  _ ->
+                      {'error', 'not_found'}
+              end
+      end
+     ).
+
+%%------------------------------------------------------------------------------
+%% @doc
+%% @end
+%%------------------------------------------------------------------------------
 -spec init(map()) -> state().
 init(#{name := Name}) ->
     #{name => Name,
@@ -162,70 +217,13 @@ init(#{name := Name}) ->
       jobs => #{}
      }.
 
+%%------------------------------------------------------------------------------
+%% @doc
+%% @end
+%%------------------------------------------------------------------------------
 -spec apply(ra_machine:command_meta_data(), command(), state()) ->
           {state(), Reply :: term(), ra_machine:effects()} |
           {state(), Reply :: term()}.
-
-apply(#{index := _RaftIdx}
-     ,{'account_workers', AccountId}
-     ,State
-     ) ->
-    case find_account_in_state(AccountId, State) of
-        {'ok', #{jobs := Jobs}} ->
-            {State, {'ok', Jobs}};
-        _ ->
-            {State, {'error', 'not_found'}}
-    end;
-
-apply(#{index := _RaftIdx}
-     ,{'worker_info', {AccountId, JobId}}
-     ,State
-     ) ->
-    kz_log:put_callid(JobId),
-    case get_account_job_from_state(AccountId, JobId, State) of
-        {'ok', {_, Job}} ->
-            {State, {'ok', Job}};
-        _ ->
-            {State, {'error', 'not_found'}}
-    end;
-
-apply(#{index := _RaftIdx}
-     ,{'pid_info', Pid}
-     ,#{'pids' := Pids} = State
-     ) ->
-    case maps:get(Pid, Pids, 'undefined') of
-        'undefined' -> {State, {'error', 'not_found'}};
-        Map -> {State, {'ok', Map}}
-    end;
-
-apply(#{index := _RaftIdx}
-     ,'list_pids'
-     ,State
-     ) ->
-    {State, {'ok', maps:keys(maps:get('pids', State, #{}))}};
-
-apply(#{index := _RaftIdx}
-     ,'list_account_ids'
-     ,State
-     ) ->
-    {State, {'ok', maps:fold(fun(AccountId, Map, Acc) ->
-                                     Acc#{AccountId => maps:size(maps:get('jobs', Map, #{}))}
-                             end
-                            ,#{}
-                            ,maps:get('accounts', State, #{})
-                            )
-            }
-    };
-
-apply(#{index := _RaftIdx}
-     ,'workers_count'
-     ,State
-     ) ->
-    {State, {'ok', [{'worker_counts', maps:size(maps:get('pids', State, #{}))}
-                   ,{'account_counts', maps:size(maps:get('accounts', State, #{}))}
-                   ]
-            }
-    };
 
 apply(#{index := RaftIdx}
      ,{'down', Pid, 'normal'}
@@ -514,14 +512,16 @@ apply(_Meta, _Msg, State) ->
     lager:debug("received unknown command: ~p", [_Msg]),
     {State, {'error', 'unknown_command'}, []}.
 
-%% @private
+%%------------------------------------------------------------------------------
+%% @doc
+%% @end
+%%------------------------------------------------------------------------------
 -spec maybe_account_is_done(AccountId::kz_term:ne_binary(), Account::map(), Accounts::map()) -> Accounts::map().
 maybe_account_is_done(AccountId, #{jobs := Jobs}, Accounts) when map_size(Jobs) =:= 0 ->
     maps:without([AccountId], Accounts);
 maybe_account_is_done(AccountId, Account, Accounts) ->
     Accounts#{AccountId => Account}.
 
-%% @private
 -spec maybe_remove_job_from_account_state(kz_term:ne_binary(), kz_term:ne_binary(), state()) ->
           {'ok', state(), Job::map()} |
           {'error', 'not_found'}.
@@ -533,7 +533,6 @@ maybe_remove_job_from_account_state(AccountId, JobId, State) ->
             {'error', 'not_found'}
     end.
 
-%% @private
 -spec maybe_remove_job_from_account_state(kz_term:ne_binary(), kz_term:ne_binary(), reference(), state()) ->
           {'ok', state(), Job::map()} |
           {'error', 'not_found'}.
@@ -545,7 +544,6 @@ maybe_remove_job_from_account_state(AccountId, JobId, Ref, State) ->
             {'error', 'not_found'}
     end.
 
-%% @private
 -spec remove_job_from_account_state(kz_term:ne_binary(), kz_term:ne_binary(), tuple(), state()) ->
           {'ok', state(), map()}.
 remove_job_from_account_state(AccountId, JobId
@@ -559,7 +557,6 @@ remove_job_from_account_state(AccountId, JobId
                      },
     {'ok', NewState, Job}.
 
-%% @private
 -spec maybe_remove_pid_from_state(boolean(), job_id(), map(), state()) ->
           {state(), ra_machine:effects()}.
 maybe_remove_pid_from_state(ShouldKill, _JobId, #{pid := Pid} = Job, #{pids := Pids}=State) ->
@@ -590,7 +587,6 @@ is_worker_alive(#{pid := Pid}=Job) ->
 is_worker_alive(_) ->
     'no_pid'.
 
-%% @private
 -spec find_account_in_state(kz_term:ne_binary(), state()) ->
           {'ok', Account::map()} |
           {'error', 'not_found'}.
@@ -602,7 +598,6 @@ find_account_in_state(AccountId, #{accounts := Accounts}) ->
 find_account_in_state(_, _) ->
     {'error', 'not_found'}.
 
-%% @private
 -spec get_account_job_from_state(kz_term:ne_binary(), kz_term:ne_binary(), state()) ->
           {'ok', {Account::map(), Job::map()}} |
           {'error', 'not_found'}.
@@ -614,6 +609,10 @@ get_account_job_from_state(AccountId, JobId, State) ->
             {'error', 'not_found'}
     end.
 
+%%------------------------------------------------------------------------------
+%% @doc
+%% @end
+%%------------------------------------------------------------------------------
 -spec state_enter(ra_server:ra_state(), state()) -> ra_machine:effects().
 state_enter('leader', #{pids := PMap}) ->
     Pids = maps:keys(PMap),
@@ -650,6 +649,10 @@ process_start_retry(Map) ->
              ,Map
              ).
 
+%%------------------------------------------------------------------------------
+%% @doc
+%% @end
+%%------------------------------------------------------------------------------
 -spec pending_accounts() -> kz_term:ne_binaries().
 pending_accounts() ->
     ViewOptions = ['reduce'
@@ -741,6 +744,24 @@ update_job_state(JobId, State, Acc) ->
             Acc
     end.
 
+%%------------------------------------------------------------------------------
+%% @doc
+%% @end
+%%------------------------------------------------------------------------------
+-spec start_worker(kz_term:ne_binary(), kz_term:ne_binary(), reference()) -> pid().
+start_worker(AccountId, JobId, Ref) ->
+    kz_process:spawn(fun start_worker/1 , [{AccountId, JobId, Ref}]).
+
+start_worker({AccountId, JobId, Ref}) ->
+    lager:debug("starting worker for job ~s (account id: ~s)", [JobId, AccountId]),
+    Node = rand_node(),
+    Reply = rpc:call(Node, 'fax_worker_sup', 'start_fax_job', [AccountId, JobId], ?RPC_CALL_TIMEOUT),
+    ra:process_command(id(), {'start_worker_result', {AccountId, JobId, Ref, Node, Reply}}).
+
+%%------------------------------------------------------------------------------
+%% @doc
+%% @end
+%%------------------------------------------------------------------------------
 cluster_name() -> <<"faxes">>.
 
 -spec ra_name() -> 'fax'.
@@ -857,16 +878,6 @@ start_new() ->
 stop() ->
     ra:stop_server(id()).
 
--spec start_worker(kz_term:ne_binary(), kz_term:ne_binary(), reference()) -> pid().
-start_worker(AccountId, JobId, Ref) ->
-    kz_process:spawn(fun start_worker/1 , [{AccountId, JobId, Ref}]).
-
-start_worker({AccountId, JobId, Ref}) ->
-    lager:debug("starting worker for job ~s (account id: ~s)", [JobId, AccountId]),
-    Node = rand_node(),
-    Reply = rpc:call(Node, 'fax_worker_sup', 'start_fax_job', [AccountId, JobId], ?RPC_CALL_TIMEOUT),
-    ra:process_command(id(), {'start_worker_result', {AccountId, JobId, Ref, Node, Reply}}).
-
 -spec available_nodes() -> [node()].
 available_nodes() ->
     {'ok', Members, _Leader} = ra:members(ra_name()),
@@ -882,3 +893,29 @@ rand_node(Nodes) ->
     Size = length(Nodes),
     Selected = rand:uniform(Size),
     lists:nth(Selected, Nodes).
+
+%%------------------------------------------------------------------------------
+%% @doc
+%% @end
+%%------------------------------------------------------------------------------
+-spec process_command(any()) -> any().
+process_command(Cmd) ->
+    case ra:process_command(ra_name(), Cmd) of
+        {'timeout', _} ->
+            {'error', 'timeout'};
+        {'error', _}=Error ->
+            Error;
+        {'ok', Reply, _ServerId} ->
+            Reply
+    end.
+
+-spec query_state(fun()) -> any().
+query_state(Fun) ->
+    case ra:local_query(ra_name(), Fun) of
+        {'timeout', _} ->
+            {'error', 'timeout'};
+        {'error', _}=Error ->
+            Error;
+        {'ok', {_RaIdxTerm, Reply}, _ServerId} ->
+            Reply
+    end.
