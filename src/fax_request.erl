@@ -1,6 +1,6 @@
 %%%-----------------------------------------------------------------------------
 %%% @copyright (C) 2012-2021, 2600Hz
-%%% @doc Process fax request
+%%% @doc Process fax request.
 %%% @author James Aimonetti
 %%%
 %%% This Source Code Form is subject to the terms of the Mozilla Public
@@ -84,6 +84,8 @@
                             ,<<"send_to">>
                             ]
        ).
+
+-define(MAX_STORE_COUNT, 5).
 
 %%%=============================================================================
 %%% API
@@ -200,12 +202,34 @@ handle_cast({'gen_listener',{'is_consuming',_}}, #state{call=Call}=State) ->
         'false' ->
             start_receive_fax(State)
     end;
-handle_cast('store_document', State) ->
-    {'noreply', State#state{status = <<"storing document">>}, ?POLL_INTERVAL};
+handle_cast({'retry_store_document', Error}, #state{monitor={_, Ref}, fax_store_count=?MAX_STORE_COUNT}=State) ->
+    erlang:demonitor(Ref),
+    system_report(State
+                 ,<<"Store Fax Document Failed">>
+                 ,kz_binary:format("maximum retry to save fax document: ~p", [Error])
+                 ),
+    lager:error("reached to maximum store document retry, going down"),
+    {'stop', 'normal', State};
+handle_cast({'retry_store_document', _Error}, #state{monitor={_, Ref}, fax_store_count=StoreCount}=State) ->
+    erlang:demonitor(Ref),
+    {'noreply', State#state{fax_store_count=StoreCount + 1
+                           ,status = <<"storing document">>
+                           }, ?POLL_INTERVAL};
+handle_cast({'retry_store_attachment', Error}, #state{monitor={_, Ref}, fax_store_count=?MAX_STORE_COUNT}=State) ->
+    erlang:demonitor(Ref),
+    system_report(State
+                 ,<<"Store Fax Attachment Failed">>
+                 ,kz_binary:format("maximum retry to save fax attachment: ~p", [Error])
+                 ),
+    lager:error("reached to maximum store attachment retry, going down"),
+    {'stop', 'normal', State};
+handle_cast({'retry_store_attachment', _Error}, #state{monitor={_, Ref}, fax_store_count=StoreCount}=State) ->
+    erlang:demonitor(Ref),
+    {'noreply', State#state{fax_store_count=StoreCount + 1}, ?POLL_INTERVAL};
 handle_cast({'store_attachment', FaxDoc}, #state{monitor={_, Ref}}=State) ->
     erlang:demonitor(Ref),
     {'noreply', State#state{fax_doc=FaxDoc
-                           ,status = <<"storing document">>
+                           ,status = <<"storing attachment">>
                            }, ?POLL_INTERVAL};
 handle_cast('success', State) ->
     notify_success(State),
@@ -489,7 +513,7 @@ store_document(Pid, #state{fax_result=JObj
             gen_server:cast(Pid, {'store_attachment', FaxDoc});
         {'error', Error} ->
             lager:debug("error storing fax document ~s: ~p", [FaxId, Error]),
-            gen_server:cast(Pid, 'store_document')
+            gen_server:cast(Pid, {'retry_store_document', Error})
     end.
 
 -spec store_attachment(state()) -> kz_term:pid_ref().
@@ -518,11 +542,11 @@ store_attachment(Pid, #state{call=Call
                 {'missing', _} ->
                     lager:warning("missing fax attachment on fax id ~s",[FaxId]),
                     timer:sleep(?RETRY_SAVE_ATTACHMENT_DELAY),
-                    gen_server:cast(Pid, 'store_attachment');
-                {'error', _R} ->
-                    lager:debug("error '~p' saving fax attachment on fax id ~s",[_R, FaxId]),
+                    gen_server:cast(Pid, {'retry_store_attachment', <<"missing">>});
+                {'error', Error} ->
+                    lager:debug("error '~p' saving fax attachment on fax id ~s",[Error, FaxId]),
                     timer:sleep(?RETRY_SAVE_ATTACHMENT_DELAY),
-                    gen_server:cast(Pid, 'store_attachment')
+                    gen_server:cast(Pid, {'retry_store_attachment', Error})
             end
     end.
 
@@ -683,6 +707,35 @@ notify_success(#state{call=Call
                 | notify_fields(Call, JObj)
                 ]),
     kapps_notify_publisher:cast(Message, fun kapi_notifications:publish_fax_inbound/1).
+
+-spec system_report(state(), kz_term:ne_binary(), kz_term:ne_binary()) -> 'ok'.
+system_report(#state{call=Call
+                    ,owner_id=OwnerId
+                    ,faxbox_id=FaxBoxId
+                    ,fax_notify=Notify
+                    ,account_id=AccountId
+                    ,fax_result=JObj
+                    ,storage=#fax_storage{id=FaxId, db=FaxDb}
+                    }
+             ,Subject
+             ,Message) ->
+    Props = props:filter_undefined(
+              [{<<"Fax-ID">>, FaxId}
+              ,{<<"Owner-ID">>, OwnerId}
+              ,{<<"FaxBox-ID">>, FaxBoxId}
+              ,{<<"Account-ID">>, AccountId}
+              ,{<<"Account-DB">>, FaxDb}
+              ,{<<"Fax-Notifications">>, Notify}
+              | notify_fields(Call, JObj)
+              ]),
+    Notify = props:filter_undefined(
+               [{<<"Subject">>, kz_binary:format("System Alert: ~s", [Subject])}
+               ,{<<"Message">>, Message}
+               ,{<<"Details">>, kz_json:from_list(Props)}
+               ,{<<"Account-ID">>, AccountId}
+               | kz_api:default_headers(?APP_NAME, ?APP_VERSION)
+               ]),
+    kz_amqp_worker:cast(Notify, fun kapi_notifications:publish_system_alert/1).
 
 -spec send_error_status(state(), kz_term:ne_binary(), kz_term:api_object()) -> 'ok'.
 send_error_status(State, Status, FaxInfo) ->
