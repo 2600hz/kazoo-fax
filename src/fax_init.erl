@@ -30,7 +30,7 @@ start_link() ->
     _ = start_listener(Workers, Dispatch, ?PORT),
 
     fax_maintenance:refresh_views(),
-    _ = fax_ra:start(),
+    _ = fax_ra_node:start(),
     'ignore'.
 
 start_listener(Workers, Dispatch, Port) ->

@@ -69,7 +69,7 @@ If the worker has a Pid, and process associated with that Pid is still running t
 
 If the worker chosen for removal, it's job object will get remove from Fax cluster state. If this operation is successful then the job document
 in `faxes` database will be updated to put the jib state back into `pending` state. This will result the job to be picked up later again by
-`fax_ra`.
+`fax_ra` Ra machine.
 
 ```bash
 sup fax_maintenance remove_account_stale_workers {ACCOUNT_ID}
@@ -107,12 +107,12 @@ Node: 'kazoo_apps@kazoo.test.com'
 ```
 
 
-## `fax_ra workers_count/0`
+## `fax_ra_action workers_count/0`
 
 Prints state of the number of workers and the number of accounts that being processes.
 
 ```bash
-sup fax_ra workers_count
+sup fax_ra_action workers_count
 {ok,[{workers_count,8},{account_counts,4}]}
 ```
 
