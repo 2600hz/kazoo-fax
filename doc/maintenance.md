@@ -59,7 +59,7 @@ sup fax_maintenance account_workers {ACCOUNT_ID}
 ## `remove_all_stale_workers/1`
 ## `remove_single_stale_worker/2`
 
-This will attempt to find all stale workers the are older than specified timestamp and remove them.
+This will attempt to find all stale workers that are older than specified timestamp and remove them.
 
 The `Timestamp` is in UTC Gregorian seconds. If `Timestamp` is not provided, anything older than past 24 hours is being considered older.
 
