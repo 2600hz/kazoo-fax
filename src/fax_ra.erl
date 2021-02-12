@@ -24,7 +24,7 @@
 -export([start_worker/3]).
 
 %% Internal
--export([process_start_retry/1]).
+-export([process_start_retry/2]).
 
 -include("fax.hrl").
 
@@ -120,12 +120,10 @@ apply(#{index := RaftIdx}
                                                     ,retried => maps:get('retried', Job, 0) + 1
                                                     }
                                    },
+                    StartRetry = maps:put({AccountId, JobId, Ref}, 'true', maps:get('start_retry', State, #{})),
                     NewState = State#{pids => maps:without([Pid], Pids)
                                      ,accounts => Accounts#{AccountId => Account#{jobs => NewJobs}}
-                                     ,start_retry => maps:put({AccountId, JobId, Ref}
-                                                             ,'true'
-                                                             ,maps:get('start_retry', State, #{})
-                                                             )
+                                     ,start_retry => StartRetry
                                      },
                     {NewState, 'ok', []};
                 _Other ->
@@ -246,11 +244,9 @@ apply(#{index := RaftIdx}
                                          }
                            },
             %% FIXME: demonitor old pid? remove old pid from state?
+            StartRetry = maps:put({AccountId, JobId, NewRef}, 'true', maps:get('start_retry', State, #{})),
             NewState = State#{accounts => Accounts#{AccountId => Account#{jobs => NewJobs}}
-                             ,start_retry => maps:put({AccountId, JobId, NewRef}
-                                                     ,'true'
-                                                     ,maps:get('start_retry', State, #{})
-                                                     )
+                             ,start_retry => StartRetry
                              },
             {NewState, 'ok', []};
         _Else ->
@@ -276,11 +272,10 @@ apply(#{index := RaftIdx}
                                     ,index => RaftIdx
                                     }
                            },
+            StartRetry = maps:without([{AccountId, JobId, Ref}], maps:get('start_retry', State, #{})),
             NewState = State#{accounts => Accounts#{AccountId => Account#{jobs => NewJobs}}
                              ,pids => NewPids
-                             ,start_retry => maps:without([{AccountId, JobId, Ref}]
-                                                         ,maps:get('start_retry', State, #{})
-                                                         )
+                             ,start_retry => StartRetry
                              },
             Effects = [{'monitor', 'process', Pid}],
             {NewState, 'ok', Effects};
@@ -316,11 +311,9 @@ apply(#{index := RaftIdx}
                                          ,retried => maps:get('retried', Job, 0) + 1
                                          }
                            },
+            StartRetry = maps:put({AccountId, JobId, Ref}, 'true', maps:get('start_retry', State, #{})),
             NewState = State#{accounts => Accounts#{AccountId => Account#{jobs => NewJobs}}
-                             ,start_retry => maps:put({AccountId, JobId, Ref}
-                                                     ,'true'
-                                                     ,maps:get('start_retry', State, #{})
-                                                     )
+                             ,start_retry => StartRetry
                              },
             {NewState, 'ok', []};
         _Else ->
@@ -329,12 +322,13 @@ apply(#{index := RaftIdx}
 
 apply(#{index := RaftIdx}
      ,{'start_worker', {AccountId, JobId, Ref}}
-     ,#{accounts := Accounts} = State
+     ,#{accounts := Accounts
+       } = State
      ) ->
     kz_log:put_callid(JobId),
     case maps:get(AccountId, Accounts, 'undefined') of
-        #{jobs := #{JobId := P}} ->
-            {State, {'error', {'exists', P}}};
+        #{jobs := #{JobId := Job}} ->
+            {State, {'error', {'exists', Job}}};
         #{limit := Limit, jobs := #{} = Jobs} = Account
           when Limit > map_size(Jobs) ->
             NewJobs = Jobs#{JobId => #{ref => Ref
@@ -343,8 +337,10 @@ apply(#{index := RaftIdx}
                            },
             Effects = [{'mod_call', ?MODULE, 'start_worker', [AccountId, JobId, Ref]}],
             {State#{accounts => maps:update(AccountId, Account#{jobs => NewJobs}, Accounts)}, 'ok', Effects};
-        #{limit := Limit} ->
-            {State#{}, {'error', {'limit', Limit}}};
+        #{limit := _Limit} ->
+            lager:debug("account ~s hit the worker limits ~b, saving the job for retry", [AccountId, _Limit]),
+            NewState = State#{start_retry => maps:put({AccountId, JobId, Ref}, 'true', maps:get('start_retry', State, #{}))},
+            {NewState, 'ok', []};
         _NoAccount ->
             Account = #{jobs => #{JobId => #{ref => Ref, raft => RaftIdx}}
                        ,limit => ?DEFAULT_LIMITS(AccountId)
@@ -361,10 +357,10 @@ apply(_Meta, _Msg, State) ->
 %% @doc
 %% @end
 %%------------------------------------------------------------------------------
--spec maybe_account_is_done(AccountId::kz_term:ne_binary(), Account::map(), Accounts::map()) -> Accounts::map().
-maybe_account_is_done(AccountId, #{jobs := Jobs}, Accounts) when map_size(Jobs) =:= 0 ->
+-spec maybe_remove_account(AccountId::kz_term:ne_binary(), Account::map(), Accounts::map()) -> Accounts::map().
+maybe_remove_account(AccountId, #{jobs := Jobs}, Accounts) when map_size(Jobs) =:= 0 ->
     maps:without([AccountId], Accounts);
-maybe_account_is_done(AccountId, Account, Accounts) ->
+maybe_remove_account(AccountId, Account, Accounts) ->
     Accounts#{AccountId => Account}.
 
 -spec maybe_remove_job_from_account_state(kz_term:ne_binary(), kz_term:ne_binary(), state()) ->
@@ -398,7 +394,7 @@ remove_job_from_account_state(AccountId, JobId
     lager:debug("removing job ~s", [JobId]),
     NewJobs = maps:without([JobId], maps:get('jobs', Account, #{})),
     NewState = State#{accounts =>
-                          maybe_account_is_done(AccountId, Account#{jobs => NewJobs}, Accounts)
+                          maybe_remove_account(AccountId, Account#{jobs => NewJobs}, Accounts)
                      },
     {'ok', NewState, Job}.
 
@@ -470,7 +466,11 @@ state_enter(_, _) -> [].
 -spec tick(non_neg_integer(), state()) -> ra_machine:effects().
 tick(_Ts, State) ->
     _ = erlang:spawn('fax_ra_action', 'process_accounts', []),
-    _ = erlang:spawn(?MODULE, 'process_start_retry', [maps:get('start_retry', State, #{})]),
+    _ = erlang:spawn(?MODULE, 'process_start_retry'
+                    ,[maps:get('accounts', State, #{})
+                     ,maps:get('start_retry', State, #{})
+                     ]
+                    ),
     [].
 
 -spec overview(state()) -> map().
@@ -484,15 +484,28 @@ overview(#{pids := Pids
       accounts => Accounts
      }.
 
--spec process_start_retry(map()) -> 'ok'.
-process_start_retry(Map) ->
-    maps:fold(fun({AccountId, JobId, Ref}, _, _) ->
-                      _ = start_worker(AccountId, JobId, Ref),
-                      'ok'
+-spec process_start_retry(map(), map()) -> 'ok'.
+process_start_retry(Accounts, StartRetry) ->
+    maps:fold(fun({A, J, R}, _, _) ->
+                      process_start_retry(A, J, R, Accounts)
               end
              ,'ok'
-             ,Map
+             ,StartRetry
              ).
+
+-spec process_start_retry(kz_term:ne_binary(), kz_term:ne_binary(), reference(), map()) -> 'ok'.
+process_start_retry(AccountId, JobId, Ref, Accounts) ->
+    case maps:get(AccountId, Accounts, 'undefined') of
+        #{limit := Limit, jobs := #{} = Jobs}
+          when Limit > map_size(Jobs) ->
+            _ = start_worker(AccountId, JobId, Ref),
+            'ok';
+        #{limit := _Limit} ->
+            'ok';
+        _Other ->
+            _ = start_worker(AccountId, JobId, Ref),
+            'ok'
+    end.
 
 %%------------------------------------------------------------------------------
 %% @doc

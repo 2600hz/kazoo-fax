@@ -41,8 +41,6 @@
        ).
 -define(TICK_INTERVAL, 5 * ?MILLISECONDS_IN_SECOND).
 
--define(RPC_CALL_TIMEOUT, 5 * ?MILLISECONDS_IN_SECOND).
-
 %%%=============================================================================
 %%% Command functions
 %%%=============================================================================
@@ -204,7 +202,9 @@ start_processing_account(AccountId, JobIds) ->
 -spec start_account_worker(kz_term:ne_binary(), kz_term:ne_binary(), kz_term:ne_binaries()) -> kz_term:ne_binaries().
 start_account_worker(AccountId, JobId, Acc) ->
     case ra:process_command(fax_ra_node:ra_name(), {'start_worker', {AccountId, JobId, make_ref()}}) of
-        {'ok', {'error', Error}, _ServerId} -> %% {limit, Limit} or {'exists', P}
+        {'ok', {'error', {'exists', _Job}}, _ServerId} ->
+            Acc;
+        {'ok', {'error', Error}, _} ->
             lager:debug("failed to start job ~s: ~p", [JobId, Error]),
             [JobId | Acc];
         {'ok', _Ok, _ServerId} ->
@@ -234,12 +234,16 @@ maybe_rollback_to_pending(AccountId, JobIds) ->
             lager:error("failed to rollback to pending: ~s", [kz_binary:join(Failed)])
     end.
 
+%% lifted from fax_worker
+-define(DEFAULT_RETRY_PERIOD, kapps_config:get_integer(?CONFIG_CAT, <<"default_retry_period">>, 300)).
+
 -spec update_job_state(kz_term:ne_binary(), kz_term:ne_binary(), kz_term:ne_binaries()) -> kz_term:ne_binaries().
 update_job_state(JobId, State, Acc) ->
     Options = [{'should_create', 'false'}
               ,{'ensure_saved', 'true'}
               ,{'update', [{<<"pvt_job_status">>, State}
                           ,{<<"pvt_modified">>, kz_time:now_s()}
+                          ,{<<"retry_after">>, ?DEFAULT_RETRY_PERIOD}
                           ]
                }
               ],
