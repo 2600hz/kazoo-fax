@@ -215,7 +215,7 @@ handle_cast({'retry_store_document', _Error}, #state{monitor={_, Ref}, fax_store
     {'noreply', State#state{fax_store_count=StoreCount + 1
                            ,status = <<"storing document">>
                            }, ?POLL_INTERVAL};
-handle_cast({'retry_store_attachment', 'file_not_exists' = Error}, #state{monitor={_, Ref}}=State) ->
+handle_cast({'retry_store_attachment', 'file_not_found' = Error}, #state{monitor={_, Ref}}=State) ->
     erlang:demonitor(Ref),
     system_report(State
                  ,<<"Store Fax Attachment Failed">>
