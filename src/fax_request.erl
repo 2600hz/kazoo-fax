@@ -215,6 +215,14 @@ handle_cast({'retry_store_document', _Error}, #state{monitor={_, Ref}, fax_store
     {'noreply', State#state{fax_store_count=StoreCount + 1
                            ,status = <<"storing document">>
                            }, ?POLL_INTERVAL};
+handle_cast({'retry_store_attachment', 'file_not_found' = Error}, #state{monitor={_, Ref}}=State) ->
+    erlang:demonitor(Ref),
+    system_report(State
+                 ,<<"Store Fax Attachment Failed">>
+                 ,kz_binary:format("media server failed to save the attachment: ~p", [Error])
+                 ),
+    lager:error("media server failed to save the attachment, going down: ~p", [Error]),
+    {'stop', 'normal', State};
 handle_cast({'retry_store_attachment', Error}, #state{monitor={_, Ref}, fax_store_count=?MAX_STORE_COUNT}=State) ->
     erlang:demonitor(Ref),
     system_report(State
@@ -534,7 +542,7 @@ store_attachment(Pid, #state{call=Call
         'ok' ->
             lager:debug("fax attachment stored successfully into ~s / ~s / ~s", [kz_doc:account_db(FaxDoc), FaxId, AttachmentId]),
             gen_server:cast(Pid, 'success');
-        {'error', _} ->
+        {'error', StoreError} ->
             case check_fax_attachment(FaxDb, FaxId, AttachmentId) of
                 {'ok', _} ->
                     lager:debug("fax attachment stored successfully despite error into ~s / ~s / ~s", [kz_doc:account_db(FaxDoc), FaxId, AttachmentId]),
@@ -542,11 +550,11 @@ store_attachment(Pid, #state{call=Call
                 {'missing', _} ->
                     lager:warning("missing fax attachment on fax id ~s",[FaxId]),
                     timer:sleep(?RETRY_SAVE_ATTACHMENT_DELAY),
-                    gen_server:cast(Pid, {'retry_store_attachment', <<"missing">>});
+                    gen_server:cast(Pid, {'retry_store_attachment', StoreError});
                 {'error', Error} ->
                     lager:debug("error '~p' saving fax attachment on fax id ~s",[Error, FaxId]),
                     timer:sleep(?RETRY_SAVE_ATTACHMENT_DELAY),
-                    gen_server:cast(Pid, {'retry_store_attachment', Error})
+                    gen_server:cast(Pid, {'retry_store_attachment', StoreError})
             end
     end.
 
