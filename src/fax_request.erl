@@ -720,30 +720,30 @@ notify_success(#state{call=Call
 system_report(#state{call=Call
                     ,owner_id=OwnerId
                     ,faxbox_id=FaxBoxId
-                    ,fax_notify=Notify
+                    ,fax_notify=FaxNotify
                     ,account_id=AccountId
                     ,fax_result=JObj
                     ,storage=#fax_storage{id=FaxId, db=FaxDb}
                     }
              ,Subject
              ,Message) ->
-    Props = props:filter_undefined(
-              [{<<"Fax-ID">>, FaxId}
-              ,{<<"Owner-ID">>, OwnerId}
-              ,{<<"FaxBox-ID">>, FaxBoxId}
-              ,{<<"Account-ID">>, AccountId}
-              ,{<<"Account-DB">>, FaxDb}
-              ,{<<"Fax-Notifications">>, Notify}
-              | notify_fields(Call, JObj)
-              ]),
-    Notify = props:filter_undefined(
-               [{<<"Subject">>, kz_binary:format("System Alert: ~s", [Subject])}
-               ,{<<"Message">>, Message}
-               ,{<<"Details">>, kz_json:from_list(Props)}
-               ,{<<"Account-ID">>, AccountId}
-               | kz_api:default_headers(?APP_NAME, ?APP_VERSION)
-               ]),
-    kz_amqp_worker:cast(Notify, fun kapi_notifications:publish_system_alert/1).
+    Details = props:filter_undefined(
+                [{<<"Fax-ID">>, FaxId}
+                ,{<<"Owner-ID">>, OwnerId}
+                ,{<<"FaxBox-ID">>, FaxBoxId}
+                ,{<<"Account-ID">>, AccountId}
+                ,{<<"Account-DB">>, FaxDb}
+                ,{<<"Fax-Notifications">>, FaxNotify}
+                | notify_fields(Call, JObj)
+                ]),
+    Prop = props:filter_undefined(
+             [{<<"Subject">>, kz_binary:format("System Alert: ~s", [Subject])}
+             ,{<<"Message">>, Message}
+             ,{<<"Details">>, kz_json:from_list(Details)}
+             ,{<<"Account-ID">>, AccountId}
+             | kz_api:default_headers(?APP_NAME, ?APP_VERSION)
+             ]),
+    kz_amqp_worker:cast(Prop, fun kapi_notifications:publish_system_alert/1).
 
 -spec send_error_status(state(), kz_term:ne_binary(), kz_term:api_object()) -> 'ok'.
 send_error_status(State, Status, FaxInfo) ->
