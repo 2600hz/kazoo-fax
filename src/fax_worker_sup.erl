@@ -1,5 +1,5 @@
 %%%-----------------------------------------------------------------------------
-%%% @copyright (C) 2012-2020, 2600Hz
+%%% @copyright (C) 2012-2021, 2600Hz
 %%% @doc
 %%% @author Luis Azedo
 %%%
@@ -22,7 +22,11 @@
 -export([start_link/0]).
 -export([init/1]).
 
--define(CHILDREN, [?WORKER_TYPE('fax_worker', 'transient')]).
+%% We can't use `transient' here. fax_ra will also try to restart the worker,
+%% but before it can do anything supervisor is already started a new process.
+%% This will result in two worker process for the same job.
+%% fax_ra in this case can not monitor the newly restarted process by supervisor.
+-define(CHILDREN, [?WORKER_TYPE('fax_worker', 'temporary')]).
 
 -spec start_fax_job(kz_term:ne_binary(), kz_term:ne_binary()) -> any().
 start_fax_job(AccountId, JobId) ->
