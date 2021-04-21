@@ -520,7 +520,7 @@ remove_all_stale_workers() ->
     Timestamp = calendar:datetime_to_gregorian_seconds({kz_date:normalize({Year, Month, Day - 1}), {0, 0, 0}}),
     remove_all_stale_workers(Timestamp).
 
--spec remove_all_stale_workers(kz_term:ne_binary()) -> 'no_return'.
+-spec remove_all_stale_workers(kz_term:ne_binary() | kz_time:gregorian_seconds()) -> 'no_return'.
 remove_all_stale_workers(Timestamp) ->
     TS = kz_term:to_integer(Timestamp),
     case get_locked_older_than([], TS) of
@@ -572,7 +572,7 @@ force_remove_all_stale_workers() ->
     Timestamp = calendar:datetime_to_gregorian_seconds({kz_date:normalize({Year, Month, Day - 1}), {0, 0, 0}}),
     force_remove_all_stale_workers(Timestamp).
 
--spec force_remove_all_stale_workers(kz_term:ne_binary()) -> 'no_return'.
+-spec force_remove_all_stale_workers(kz_term:ne_binary() | kz_time:gregorian_seconds()) -> 'no_return'.
 force_remove_all_stale_workers(Timestamp) ->
     TS = kz_term:to_integer(Timestamp),
     case get_locked_older_than([], TS) of
@@ -624,7 +624,7 @@ force_exit_all_stale_workers() ->
     Timestamp = calendar:datetime_to_gregorian_seconds({kz_date:normalize({Year, Month, Day - 1}), {0, 0, 0}}),
     force_exit_all_stale_workers(Timestamp).
 
--spec force_exit_all_stale_workers(kz_term:ne_binary()) -> 'no_return'.
+-spec force_exit_all_stale_workers(kz_term:ne_binary() | kz_time:gregorian_seconds()) -> 'no_return'.
 force_exit_all_stale_workers(Timestamp) ->
     TS = kz_term:to_integer(Timestamp),
     case get_locked_older_than([], TS) of
