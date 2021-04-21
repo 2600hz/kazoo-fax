@@ -196,7 +196,12 @@ process_account(AccountId) ->
 start_processing_account(AccountId, JobIds) ->
     lager:debug("found ~b jobs for account ~s, locking the jobs and start workers", [length(JobIds), AccountId]),
     LockedJobs = lock_jobs(AccountId, JobIds),
-    Failed = lists:foldl(fun(JobId, Acc) -> start_account_worker(AccountId, JobId, Acc) end, [], LockedJobs),
+    Failed = lists:foldl(fun(JobId, Acc) ->
+                                 start_account_worker(AccountId, JobId, Acc)
+                         end
+                        ,[]
+                        ,LockedJobs
+                        ),
     maybe_rollback_to_pending(AccountId, Failed).
 
 -spec start_account_worker(kz_term:ne_binary(), kz_term:ne_binary(), kz_term:ne_binaries()) -> kz_term:ne_binaries().
@@ -219,16 +224,25 @@ start_account_worker(AccountId, JobId, Acc) ->
 
 -spec lock_jobs(kz_term:ne_binary(), kz_term:ne_binaries()) -> kz_term:ne_binaries().
 lock_jobs(AccountId, JobIds) ->
-    LockedJobs = lists:foldl(fun(JobId, Acc) -> update_job_state(JobId, <<"locked">>, Acc) end, [], JobIds),
+    LockedJobs = lists:foldl(fun(JobId, Acc) ->
+                                     update_job_state(JobId, <<"locked">>, Acc)
+                             end
+                            ,[]
+                            ,JobIds
+                            ),
     lager:debug("locked ~b pending jobs for account ~s", [length(LockedJobs), AccountId]),
     LockedJobs.
 
--spec maybe_rollback_to_pending(kz_term:ne_binary(), kz_term:ne_binaries()) -> kz_term:ne_binaries().
-maybe_rollback_to_pending(_, []) ->
-    'ok';
+-spec maybe_rollback_to_pending(kz_term:ne_binary(), kz_term:ne_binaries()) -> 'ok'.
+maybe_rollback_to_pending(_, []) -> 'ok';
 maybe_rollback_to_pending(AccountId, JobIds) ->
     lager:debug("failed to ~b jobs start worker for account ~s, rolling back to pending", [length(JobIds), AccountId]),
-    case lists:foldl(fun(JobId, Acc) -> update_job_state(JobId, <<"pending">>, Acc) end, [], JobIds) of
+    case lists:foldl(fun(JobId, Acc) ->
+                             update_job_state(JobId, <<"pending">>, Acc) end
+                    ,[]
+                    ,JobIds
+                    )
+    of
         [] -> 'ok';
         Failed ->
             lager:error("failed to rollback to pending: ~s", [kz_binary:join(Failed)])
@@ -241,9 +255,9 @@ maybe_rollback_to_pending(AccountId, JobIds) ->
 update_job_state(JobId, State, Acc) ->
     Options = [{'should_create', 'false'}
               ,{'ensure_saved', 'true'}
-              ,{'update', [{<<"pvt_job_status">>, State}
-                          ,{<<"pvt_modified">>, kz_time:now_s()}
-                          ,{<<"retry_after">>, ?DEFAULT_RETRY_PERIOD}
+              ,{'update', [{[<<"pvt_job_status">>], State}
+                          ,{[<<"pvt_modified">>], kz_time:now_s()}
+                          ,{[<<"retry_after">>], ?DEFAULT_RETRY_PERIOD}
                           ]
                }
               ],
