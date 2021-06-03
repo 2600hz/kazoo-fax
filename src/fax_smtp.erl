@@ -1,5 +1,5 @@
 %%%-----------------------------------------------------------------------------
-%%% @copyright (C) 2014-2020, 2600Hz
+%%% @copyright (C) 2014-2021, 2600Hz
 %%% @doc
 %%% @author Luis Azedo
 %%%
@@ -35,7 +35,6 @@
 
 -include("fax.hrl").
 
--define(RELAY, 'true').
 -define(SMTP_MAX_SESSIONS, kapps_config:get_integer(?CONFIG_CAT, <<"smtp_sessions">>, 50)).
 -define(DEFAULT_IMAGE_SIZE_CMD_FMT, <<"echo -n `identify -format \"%[fx:w]x%[fx:h]\" ~s`">>).
 -define(IMAGE_SIZE_CMD_FMT, kapps_config:get_binary(?CONFIG_CAT, <<"image_size_cmd_format">>, ?DEFAULT_IMAGE_SIZE_CMD_FMT)).

@@ -29,9 +29,15 @@
         ,code_change/3
         ]).
 
+-export_type([fax_storage/0]).
+
 -include("fax.hrl").
 
--define(SERVER, ?MODULE).
+-record(fax_storage, {id :: kz_term:api_binary()
+                     ,attachment_id :: kz_term:api_binary()
+                     ,db :: kz_term:api_binary()
+                     }).
+-type fax_storage() :: #fax_storage{}.
 
 -define(POLL_INTERVAL, 5 * ?MILLISECONDS_IN_SECOND).
 

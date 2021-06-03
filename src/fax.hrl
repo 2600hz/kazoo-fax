@@ -12,7 +12,6 @@
 -define(CONFIG_CAT, ?APP_NAME).
 
 -define(CACHE_NAME, 'fax_cache').
--define(FAX_WORKER_POOL, 'fax_worker_pool').
 -define(RETRY_SAVE_ATTACHMENT_DELAY, 5 * ?MILLISECONDS_IN_SECOND).
 
 -define(FAX_CHANNEL_DESTROY_PROPS, [<<"Ringing-Seconds">>, <<"Billing-Seconds">>
@@ -23,12 +22,6 @@
                                                                 ,<<"Call-ID">>, <<"Fetch-ID">>
                                                                 ]}
                                    ]).
-
--record(fax_storage, {id :: kz_term:api_binary()
-                     ,attachment_id :: kz_term:api_binary()
-                     ,db :: kz_term:api_binary()
-                     }).
--type fax_storage() :: #fax_storage{}.
 
 -type fax_job() :: kz_json:object().
 -type fax_jobs() :: [fax_job()].
@@ -45,9 +38,6 @@
 -define(FAX_RECEIVE, <<"receive">>).
 -define(FAX_END, <<"end">>).
 -define(FAX_ERROR, <<"error">>).
-
--define(FAX_STATE_LIST, [?FAX_START, ?FAX_PREPARE, ?FAX_SEND, ?FAX_RECEIVE, ?FAX_END, ?FAX_ERROR]).
--define(SERIALIZE_OUTBOUND_NUMBER, kapps_config:get_is_true(?CONFIG_CAT, <<"serialize_outbound_numbers">>, 'true')).
 
 -define(OPENXML_MIME_PREFIX, "application/vnd.openxmlformats-officedocument.").
 -define(OPENOFFICE_MIME_PREFIX, "application/vnd.oasis.opendocument.").
@@ -68,10 +58,7 @@
        ,kapps_config:get_integer(?CONFIG_CAT, <<"smtp_max_msg_size">>, 10 * ?BYTES_M)
        ).
 -define(SMTP_EXTENSIONS, [{"SIZE", kz_term:to_list(?SMTP_MSG_MAX_SIZE)}]).
--define(SMTP_CALLBACK_OPTIONS, {'callbackoptions', ['extensions', ?SMTP_EXTENSIONS]}).
 -define(SMTP_PORT, kapps_config:get_integer(?CONFIG_CAT, <<"smtp_port">>, 19025)).
-
--define(FAX_OUTBOUND_SERVER(AccountId), <<"fax_outbound_", AccountId/binary>>).
 
 -define(PORT, kapps_config:get_integer(?CONFIG_CAT, <<"port">>, 30950)).
 

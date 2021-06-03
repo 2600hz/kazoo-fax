@@ -1,5 +1,5 @@
 %%%-----------------------------------------------------------------------------
-%%% @copyright (C) 2012-2020, 2600Hz
+%%% @copyright (C) 2012-2021, 2600Hz
 %%% @doc
 %%% @author James Aimonetti
 %%%
@@ -39,7 +39,8 @@
 start_link() ->
     supervisor:start_link({'local', ?SERVER}, ?MODULE, []).
 
--spec new(kapps_call:call(), kz_json:object(), fax_storage()) -> kz_types:sup_startchild_ret().
+-spec new(kapps_call:call(), kz_json:object(), fax_request:fax_storage()) ->
+          kz_types:sup_startchild_ret().
 new(Call, JObj, Storage) ->
     supervisor:start_child(?SERVER, [Call, JObj, Storage]).
 
