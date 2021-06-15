@@ -1,5 +1,5 @@
 %%%-----------------------------------------------------------------------------
-%%% @copyright (C) 2012-2020, 2600Hz
+%%% @copyright (C) 2012-2021, 2600Hz
 %%% @doc
 %%% This Source Code Form is subject to the terms of the Mozilla Public
 %%% License, v. 2.0. If a copy of the MPL was not distributed with this
@@ -30,7 +30,7 @@ start_link() ->
     _ = start_listener(Workers, Dispatch, ?PORT),
 
     fax_maintenance:refresh_views(),
-    _ = fax_ra:start(),
+    _ = fax_ra_node:start(),
     'ignore'.
 
 start_listener(Workers, Dispatch, Port) ->

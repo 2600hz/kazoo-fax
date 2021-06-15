@@ -1,5 +1,5 @@
 %%%-----------------------------------------------------------------------------
-%%% @copyright (C) 2012-2020, 2600Hz
+%%% @copyright (C) 2012-2021, 2600Hz
 %%% @doc
 %%% This Source Code Form is subject to the terms of the Mozilla Public
 %%% License, v. 2.0. If a copy of the MPL was not distributed with this
@@ -36,7 +36,7 @@ stop(_State) ->
     _ = kapps_maintenance:unbind('migrate', 'fax_maintenance', 'migrate'),
     _ = kapps_maintenance:unbind('register_views', 'fax_app', 'register_views'),
     _ = cowboy:stop_listener('fax_file'),
-    _ = fax_ra:stop(),
+    _ = fax_ra_node:stop(),
     'ok'.
 
 -spec register_views() -> 'ok'.
