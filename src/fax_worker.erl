@@ -16,7 +16,6 @@
 -export([start_link/2]).
 
 -export([handle_tx_resp/2
-        ,handle_fax_event/2
         ,handle_job_status_query/2
         ]).
 -export([init/1
@@ -50,6 +49,8 @@
                ,resp :: kz_term:api_object()
                ,move_retry = 0 :: integer()
                ,error :: kz_term:api_ne_binary()
+               ,call = kapps_call:new() :: kapps_call:call()
+               ,call_id :: kz_term:api_ne_binary()
                }).
 -type state() :: #state{}.
 
@@ -61,18 +62,10 @@
 
 -define(BINDINGS(JobId), [{'self', []}
                          ,{'fax', [{'restrict_to', ['query_status']}]}
-                         ,{'call', [{'callid', JobId}
-                                   ,{'restrict_to', [<<"CHANNEL_FAX_STATUS">>]
-                                    }
-                                   ]
-                          }
                          ]).
 
 -define(RESPONDERS, [{{?MODULE, 'handle_tx_resp'}
                      ,[{<<"resource">>, <<"offnet_resp">>}]
-                     }
-                    ,{{?MODULE, 'handle_fax_event'}
-                     ,[{<<"call_event">>, <<"CHANNEL_FAX_STATUS">>}]
                      }
                     ,{{?MODULE, 'handle_job_status_query'}
                      ,[{<<"fax">>, <<"query_status">>}]
@@ -127,13 +120,6 @@ handle_tx_resp(JObj, Props) ->
     Srv = props:get_value('server', Props),
     gen_server:cast(Srv, {'tx_resp', kz_api:msg_id(JObj), JObj}).
 
--spec handle_fax_event(kz_json:object(), kz_term:proplist()) -> 'ok'.
-handle_fax_event(JObj, Props) ->
-    Srv = props:get_value('server', Props),
-    JobId = kz_call_event:authorizing_id(JObj),
-    Event = kz_call_event:application_event(JObj),
-    gen_server:cast(Srv, {'fax_status', Event, JobId, JObj}).
-
 -spec handle_job_status_query(kz_json:object(), kz_term:proplist()) -> 'ok'.
 handle_job_status_query(JObj, Props) ->
     'true' = kapi_fax:query_status_v(JObj),
@@ -180,11 +166,16 @@ handle_cast({'tx_resp', JobId, JObj}, #state{job_id=JobId
                                             }=State) ->
     case kz_call_event:response_message(JObj) of
         <<"SUCCESS">> ->
+            Call = kapps_call:from_json(kz_json:get_json_value(<<"Call">>, JObj)),
+            CallId = kapps_call:call_id_direct(Call),
+            kz_events:bind_call_id(CallId),
             lager:debug("received successful attempt to originate fax, continue processing"),
             send_status(State, <<"received successful attempt to originate fax">>),
             {'noreply'
             ,State#state{stage = ?FAX_NEGOTIATE
                         ,status = <<"negotiating">>
+                        ,call = Call
+                        ,call_id = CallId
                         }
             ,?NEGOTIATE_TIMEOUT
             };
@@ -244,8 +235,8 @@ handle_cast({'fax_status', <<"result">>, JobId, JObj}
     _ = file:delete(Filepath),
     gen_server:cast(self(), 'stop'),
     {'noreply', State#state{job=Doc, resp = Resp}};
-handle_cast({'fax_status', Event, JobId, _}, State) ->
-    lager:debug("fax status ~s - ~s event not handled",[JobId, Event]),
+handle_cast({'fax_status', Event, JobId, _JObj}, State) ->
+    lager:debug_unsafe("fax status ~s - ~s event not handled => ~s",[JobId, Event, kz_json:encode(_JObj)]),
     {'noreply', State};
 handle_cast({'query_status', JobId, Queue, MsgId, _JObj}
            ,#state{status=Status
@@ -370,6 +361,13 @@ handle_info('timeout', #state{stage=Stage, job=JObj}=State) ->
     {Resp, Doc} = release_failed_job('job_timeout', Stage, JObj),
     gen_server:cast(self(), 'stop'),
     {'noreply', State#state{job=Doc, resp = Resp}};
+handle_info({'kapi', {_, {'call_event', 'CHANNEL_FAX_STATUS'}, JObj}}, State) ->
+    JobId = kz_call_event:authorizing_id(JObj),
+    Event = kz_call_event:application_event(JObj),
+    gen_server:cast(self(), {'fax_status', Event, JobId, JObj}),
+    {'noreply', State};
+handle_info({'kapi', _}, State) ->
+    {'noreply', State};
 handle_info(_Info, State) ->
     lager:debug("fax worker unhandled message: ~p", [_Info]),
     {'noreply', State}.
@@ -824,7 +822,6 @@ send_fax(JobId, JObj, Q, ToDID) ->
                 ,{<<"Application-Name">>, <<"fax">>}
                 ,{<<"Timeout">>,ETimeout}
                 ,{<<"Application-Data">>, get_proxy_url(JobId)}
-                ,{<<"Origination-Call-ID">>, CallId}
                 ,{<<"Bypass-E164">>, kz_json:is_true(<<"bypass_e164">>, JObj)}
                 ,{<<"Fax-T38-Enabled">>, 'false'}
                 | kz_api:default_headers(Q, ?APP_NAME, ?APP_VERSION)
