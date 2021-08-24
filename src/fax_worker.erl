@@ -519,60 +519,67 @@ release_job(Result, JObj) ->
 -spec release_job(kz_term:proplist(), kz_json:object(), kz_json:object()) -> release_ret().
 release_job(Result, JObj, Resp) ->
     Success = props:is_true(<<"success">>, Result, 'false'),
-    Updaters = [fun increment_attempts/1
-               ,fun(J) -> kz_json:set_value(<<"tx_result">>, kz_json:from_list(Result), J) end
-               ,fun remove_pvt_queue/1
-               ,fun apply_reschedule_logic/1
-               ,fun(J) -> update_job_status(J, Success) end
+    Updaters = [fun increment_attempts/2
+               ,fun(_Fax, Acc) -> [{[<<"tx_result">>], kz_json:from_list(Result)} | Acc] end
+               ,fun remove_pvt_queue/2
+               ,fun apply_reschedule_logic/2
+               ,fun(Fax, Acc) -> update_job_status(Fax, Acc, Success) end
                ],
-    Update = lists:foldl(fun(F, J) -> F(J) end, JObj, Updaters),
-    {'ok', Saved} = kz_datamgr:ensure_saved(?KZ_FAXES_DB, Update),
+    Updates = lists:foldl(fun(F, Acc) -> F(JObj, Acc) end, [], Updaters),
+    Update = [{'update', Updates}
+             ,{'ensure_saved', 'true'}
+             ],
+    {'ok', Saved} = kz_datamgr:update_doc(?KZ_FAXES_DB, kz_doc:id(JObj), Update),
     {Resp, Saved}.
 
--spec update_job_status(kz_json:object(), boolean()) -> kz_json:object().
-update_job_status(JObj, 'true') ->
+-spec update_job_status(kz_json:object(), kz_json:flat_proplist(), boolean()) ->
+          kz_json:flat_proplist().
+update_job_status(_JObj, Updates, 'true') ->
     lager:debug("releasing job with status: completed"),
-    kz_json:set_value(<<"pvt_job_status">>, <<"completed">>, JObj);
-update_job_status(JObj, 'false') ->
+    [{[<<"pvt_job_status">>], <<"completed">>} | Updates];
+update_job_status(JObj, Updates, 'false') ->
     Attempts = kz_json:get_integer_value(<<"attempts">>, JObj, 0),
     Retries = kz_json:get_integer_value(<<"retries">>, JObj, 1),
     lager:debug("unsuccessful job has attempted ~b of ~b retries", [Attempts, Retries]),
     case Retries - Attempts >= 1 of
         'true' ->
             lager:debug("releasing job with status: pending"),
-            kz_json:set_value(<<"pvt_job_status">>, <<"pending">>, JObj);
+            [{[<<"pvt_job_status">>], <<"pending">>} | Updates];
         'false' ->
-            lager:debug("releasing job with status: failed"),
-            kz_json:set_value(<<"pvt_job_status">>, <<"failed">>, JObj)
+            lager:info("releasing job with status: failed"),
+            [{[<<"pvt_job_status">>], <<"failed">>} | Updates]
     end.
 
--spec increment_attempts(kz_json:object()) -> kz_json:object().
-increment_attempts(JObj) ->
+-spec increment_attempts(kz_json:object(), kz_json:flat_proplist()) ->
+          kz_json:flat_proplist().
+increment_attempts(JObj, Updates) ->
     Attempts = kz_json:get_integer_value(<<"attempts">>, JObj, 0),
-    kz_json:set_value(<<"attempts">>, Attempts + 1, JObj).
+    [{[<<"attempts">>], Attempts + 1} | Updates].
 
--spec remove_pvt_queue(kz_json:object()) -> kz_json:object().
-remove_pvt_queue(JObj) ->
-    kz_json:delete_key(<<"pvt_queue">>, JObj).
+-spec remove_pvt_queue(kz_json:object(), kz_json:flat_proplist()) ->
+          kz_json:flat_proplist().
+remove_pvt_queue(_JObj, Updates) ->
+    [{[<<"pvt_queue">>], 'null'} | Updates].
 
--spec apply_reschedule_logic(kz_json:object()) -> kz_json:object().
-apply_reschedule_logic(JObj) ->
+-spec apply_reschedule_logic(kz_json:object(), kz_json:flat_proplist()) ->
+          kz_json:flat_proplist().
+apply_reschedule_logic(JObj, Updates) ->
     Map = kapps_config:get_json(?CONFIG_CAT, <<"reschedule">>, kz_json:new()),
     case apply_reschedule_rules(kz_json:get_values(Map), set_default_update_fields(JObj)) of
-        {'no_rules', JObj2} ->
+        {'no_rules', []} ->
             lager:debug("no rules applied in fax reschedule logic"),
-            JObj2;
-        {'ok', JObj2} ->
+            Updates;
+        {'ok', Us} ->
             lager:debug("rule '~s' applied in fax reschedule logic"
-                       ,[kz_json:get_value(<<"reschedule_rule">>, JObj2)]
+                       ,[kz_json:get_value(<<"reschedule_rule">>, JObj)]
                        ),
-            JObj2
+            Us ++ Updates
     end.
 
 -spec apply_reschedule_rules({kz_json:objects(), kz_json:path()}, kz_json:object()) ->
-          {'ok', kz_json:object()} |
-          {'no_rules', kz_json:object()}.
-apply_reschedule_rules({[], _}, JObj) -> {'no_rules', JObj};
+          {'ok', kz_json:flat_proplist()} |
+          {'no_rules', kz_json:flat_proplist()}.
+apply_reschedule_rules({[], _}, _JObj) -> {'no_rules', []};
 apply_reschedule_rules({[Rule | Rules], [Key | Keys]}, JObj) ->
     Attempts = kz_json:get_integer_value(<<"attempts">>, JObj, 0),
     Result = kz_json:get_value(<<"tx_result">>, JObj, kz_json:new()),
@@ -589,13 +596,11 @@ apply_reschedule_rules({[Rule | Rules], [Key | Keys]}, JObj) ->
         andalso lists:member(ResultValue, ValueList)
     of
         'true' ->
-            NewJObj = kz_json:set_values([{<<"retry_after">>, RetryAfter}
-                                         ,{<<"retries">>, NewRetries}
-                                         ,{<<"reschedule_rule">>, Key}
-                                         ]
-                                        ,JObj
-                                        ),
-            {'ok', NewJObj};
+            {'ok', [{[<<"retry_after">>], RetryAfter}
+                   ,{[<<"retries">>], NewRetries}
+                   ,{[<<"reschedule_rule">>], Key}
+                   ]
+            };
         'false' ->
             apply_reschedule_rules({Rules, Keys}, JObj)
     end.
