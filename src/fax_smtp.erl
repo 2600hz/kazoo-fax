@@ -64,11 +64,11 @@
 -type state() :: #state{}.
 -type error_message() :: {'error', string(), #state{}}.
 
--type peer() :: {inet:ip_address(), non_neg_integer()}.
+-type peer() :: inet:ip_address().
 
--spec init(kz_term:ne_binary(), non_neg_integer(), peer(), kz_term:proplist()) ->
-          {'ok', string(), #state{}} |
-          {'stop', _, string()}.
+-spec init(kz_term:text(), non_neg_integer(), peer(), kz_term:proplist()) ->
+          {'ok', iolist(), #state{}} |
+          {'stop', 'normal', iolist()}.
 init(Hostname, SessionCount, Address, Options) ->
     case SessionCount > ?SMTP_MAX_SESSIONS  of
         'false' ->
@@ -743,7 +743,7 @@ add_fax_document(#state{from=From
 %% @doc
 %% @end
 %%------------------------------------------------------------------------------
--spec process_message(kz_term:ne_binary(), kz_term:ne_binary(), kz_term:proplist(), kz_term:proplist(), binary() | mimemail:mimetuple(), state()) ->
+-spec process_message(kz_term:ne_binary(), kz_term:ne_binary(), kz_term:proplist(), mimemail:parameters(), binary() | mimemail:mimetuple(), state()) ->
           {'ok', state()}.
 process_message(<<"multipart">>, Multipart, Headers, _Parameters, Body, #state{errors=Errors}=State) ->
     NewState = maybe_get_subject(Headers, State),
@@ -800,7 +800,7 @@ process_parts([{Type, SubType, _Headers, Parameters, BodyPart}
                             ),
     process_parts(Parts, maybe_ignore_no_valid_attachment(NewState)).
 
--spec maybe_process_part(kz_term:ne_binary(), kz_term:proplist(), binary() | mimemail:mimetuple(), state()) ->
+-spec maybe_process_part(kz_term:ne_binary(), mimemail:parameters(), binary() | mimemail:mimetuple(), state()) ->
           {'ok', state()}.
 maybe_process_part(<<"multipart/", Multipart/binary>>, _Parameters, Body, #state{errors=Errors}=State) ->
     lager:debug("processing multipart/~s", [Multipart]),
@@ -821,7 +821,7 @@ maybe_process_part(<<"multipart/", Multipart/binary>>, _Parameters, Body, #state
     end;
 maybe_process_part(<<"application/octet-stream">>, Parameters, Body, State) ->
     lager:debug("part is application/octet-stream, try check attachment filename extension"),
-    case props:get_value(<<"disposition">>, Parameters) of
+    case maps:get('disposition', Parameters) of
         <<"attachment">> ->
             DispositionParams = props:get_value(<<"disposition-params">>, Parameters, []),
             ContentTypeParams = props:get_value(<<"content-type-params">>, Parameters, []),
