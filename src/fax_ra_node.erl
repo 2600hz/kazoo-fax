@@ -30,7 +30,7 @@
 
 -include("fax.hrl").
 
--define(TICK_INTERVAL, 5 * ?MILLISECONDS_IN_SECOND).
+-define(TICK_INTERVAL, 20 * ?MILLISECONDS_IN_SECOND).
 
 %%------------------------------------------------------------------------------
 %% @doc
