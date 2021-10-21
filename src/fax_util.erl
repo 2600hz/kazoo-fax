@@ -83,7 +83,16 @@ is_valid_caller_id(<<>>, _) -> 'false';
 is_valid_caller_id(Number, AccountId) ->
     case knm_numbers:lookup_account(Number) of
         {'ok', AccountId, _} -> 'true';
-        _Else -> 'false'
+        _Else -> is_external_number(Number, AccountId)
+    end.
+
+-spec is_external_number(kz_term:ne_binary(), kz_term:ne_binary()) -> boolean().
+is_external_number(Number, AccountId) ->
+    ViewOptions = [{'key', [<<"external_number">>, knm_converters:normalize(Number)]}],
+    case kz_datamgr:get_results(AccountId, <<"crossbar_listings/by_type_number">>, ViewOptions) of
+        {'ok', []} -> 'false';
+        {'ok', _ExternalNumber} -> 'true';
+        {'error', _R} -> 'false'
     end.
 
 -spec is_digit(integer()) -> boolean().
