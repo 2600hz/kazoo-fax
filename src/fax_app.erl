@@ -22,6 +22,7 @@
 %%------------------------------------------------------------------------------
 -spec start(application:start_type(), any()) -> kz_types:startapp_ret().
 start(_Type, _Args) ->
+    kz_events:start_call_events(),
     register_views(),
     _ = kapps_maintenance:bind('migrate', 'fax_maintenance', 'migrate'),
     _ = kapps_maintenance:bind_and_register_views('fax', 'fax_app', 'register_views'),
