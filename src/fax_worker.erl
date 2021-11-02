@@ -17,6 +17,7 @@
 
 -export([handle_tx_resp/2
         ,handle_job_status_query/2
+        ,handle_fax_event/2
         ]).
 -export([init/1
         ,handle_call/3
@@ -70,6 +71,9 @@
                     ,{{?MODULE, 'handle_job_status_query'}
                      ,[{<<"fax">>, <<"query_status">>}]
                      }
+                    ,{{?MODULE, 'handle_fax_event'}
+                     ,[{<<"call_event">>, <<"CHANNEL_FAX_STATUS">>}]
+                     }
                     ]).
 -define(QUEUE_NAME, <<>>).
 -define(QUEUE_OPTIONS, []).
@@ -119,6 +123,13 @@ start_link(AccountId, JobId) ->
 handle_tx_resp(JObj, Props) ->
     Srv = props:get_value('server', Props),
     gen_server:cast(Srv, {'tx_resp', kz_api:msg_id(JObj), JObj}).
+
+-spec handle_fax_event(kz_json:object(), kz_term:proplist()) -> 'ok'.
+handle_fax_event(JObj, Props) ->
+    Srv = props:get_value('server', Props),
+    JobId = props:get_value('job_id', Props),
+    Event = kz_call_event:application_event(JObj),
+    gen_server:cast(Srv, {'fax_status', Event, JobId, JObj}).
 
 -spec handle_job_status_query(kz_json:object(), kz_term:proplist()) -> 'ok'.
 handle_job_status_query(JObj, Props) ->
@@ -361,13 +372,6 @@ handle_info('timeout', #state{stage=Stage, job=JObj}=State) ->
     {Resp, Doc} = release_failed_job('job_timeout', Stage, JObj),
     gen_server:cast(self(), 'stop'),
     {'noreply', State#state{job=Doc, resp = Resp}};
-handle_info({'kapi', {_, {'call_event', 'CHANNEL_FAX_STATUS'}, JObj}}, State) ->
-    JobId = kz_call_event:authorizing_id(JObj),
-    Event = kz_call_event:application_event(JObj),
-    gen_server:cast(self(), {'fax_status', Event, JobId, JObj}),
-    {'noreply', State};
-handle_info({'kapi', _}, State) ->
-    {'noreply', State};
 handle_info(_Info, State) ->
     lager:debug("fax worker unhandled message: ~p", [_Info]),
     {'noreply', State}.
@@ -382,7 +386,7 @@ handle_event(JObj, #state{job_id=JobId}) ->
         'undefined' -> kz_log:put_callid(JobId);
         CallId -> kz_log:put_callid(<<JobId/binary, "|", CallId/binary>>)
     end,
-    {'reply', []}.
+    {'reply', [{job_id, JobId}]}.
 
 %%------------------------------------------------------------------------------
 %% @doc This function is called by a `gen_server' when it is about to
