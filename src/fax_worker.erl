@@ -274,30 +274,12 @@ handle_cast('attempt_transmission', #state{job_id = JobId}=State) ->
                                   ,stage = ?FAX_PREPARE
                                   },
             send_status(NewState, <<"job acquired">>, ?FAX_START, 'undefined'),
-            gen_server:cast(self(), 'prepare_job'),
+            gen_server:cast(self(), 'send'),
             {'noreply', NewState};
         {'error', Reason} ->
             lager:debug("failed to acquire job ~s: ~p", [JobId, Reason]),
             gen_server:cast(self(), 'error'),
             {'noreply', State#state{error=kz_term:to_binary(Reason)}}
-    end;
-handle_cast('prepare_job', #state{job_id=JobId
-                                 ,job=JObj
-                                 }=State) ->
-    send_status(State, <<"fetching document to send">>, ?FAX_PREPARE, 'undefined'),
-    case write_document(JObj, JobId) of
-        {'ok', Filepath, Doc} ->
-            send_status(State, <<"prepared document for send">>, ?FAX_PREPARE, 'undefined'),
-            gen_server:cast(self(), 'send'),
-            {'noreply', State#state{job=Doc
-                                   ,file=Filepath
-                                   ,pages=kz_json:get_integer_value(<<"pvt_pages">>, Doc)
-                                   }};
-        {'error', Message} ->
-            send_error_status(State, kz_term:to_binary(Message)),
-            {Resp, Doc} = release_failed_job('bad_file', Message, JObj),
-            gen_server:cast(self(), 'stop'),
-            {'noreply', State#state{job=Doc, resp=Resp}}
     end;
 handle_cast('send', #state{job_id=JobId
                           ,job=JObj
@@ -422,18 +404,6 @@ code_change(_OldVsn, State, _Extra) ->
 %% @end
 %%------------------------------------------------------------------------------
 -spec release_failed_job(atom(), any(), kz_json:object()) -> release_ret().
-release_failed_job('bad_file', Msg, JObj) ->
-    Result = [{<<"success">>, 'false'}
-             ,{<<"result_code">>, 0}
-             ,{<<"result_text">>, Msg}
-             ,{<<"pages_sent">>, 0}
-             ,{<<"time_elapsed">>, elapsed_time(JObj)}
-             ,{<<"fax_bad_rows">>, 0}
-             ,{<<"fax_speed">>, 0}
-             ,{<<"fax_receiver_id">>, <<>>}
-             ,{<<"fax_error_correction">>, 'false'}
-             ],
-    release_job(Result, JObj);
 release_failed_job('tx_resp', Resp, JObj) ->
     Msg = kz_json:get_first_defined([<<"Error-Message">>, <<"Response-Message">>], Resp),
     <<"sip:", Code/binary>> = kz_json:get_value(<<"Response-Code">>, Resp, <<"sip:500">>),
@@ -760,18 +730,6 @@ elapsed_time(JObj) ->
     Created = kz_doc:created(JObj, Now),
     Now - Created.
 
--spec write_document(kz_json:object(), kz_term:ne_binary()) ->
-          {'ok', kz_term:ne_binary(), kz_json:object()} |
-          {'error', any()}.
-write_document(JObj, JobId) ->
-    case kz_fax_attachment:fetch_faxable(?KZ_FAXES_DB, JObj) of
-        {'ok', Content, _ContentType, Doc} ->
-            Filepath = filename:join(?TMP_DIR, <<JobId/binary, ".tiff">>),
-            kz_os:write_file(Filepath, Content),
-            {'ok', Filepath, Doc};
-        Error -> Error
-    end.
-
 -spec send_fax(kz_term:ne_binary(), kz_json:object(), kz_term:ne_binary()) -> 'ok'.
 send_fax(JobId, JObj, Q) ->
     SendFax = fun() -> send_fax(JobId, JObj, Q, get_did(JObj)) end,
@@ -871,9 +829,32 @@ get_did(JObj) ->
 
 -spec get_proxy_url(kz_term:ne_binary()) -> kz_term:ne_binary().
 get_proxy_url(JobId) ->
+    get_proxy_url(JobId, kz_app_config:get_boolean(?APP, [<<"file">>, <<"use_service">>], true)).
+
+get_proxy_url(JobId, true) -> service_proxy_url(JobId);
+get_proxy_url(JobId, false) -> host_proxy_url(JobId).
+
+host_proxy_url(JobId) ->
     Hostname = kz_network_utils:get_hostname(),
     Port = integer_to_binary(?PORT),
     list_to_binary(["http://", Hostname, ":", Port, "/fax/", JobId, ".tiff"]).
+
+service_proxy_url(JobId) ->
+    service_proxy_url(JobId, kz_app_config:get_json(?APP, [<<"file">>, <<"service">>])).
+
+service_proxy_url(JobId, undefined) ->
+    host_proxy_url(JobId);
+service_proxy_url(JobId, ServiceJSON) ->
+    ServiceProto = kz_json:get_ne_binary_value(<<"proto">>, ServiceJSON, <<"http">>),
+    ServiceHost = kz_json:get_ne_binary_value(<<"hostname">>, ServiceJSON, <<"fax-service">>),
+    ServicePort = kz_json:get_integer_value(<<"port">>, ServiceJSON),
+    ServicePortUrlPart = proto_port_to_url_part(ServiceProto, ServicePort),
+    list_to_binary([ServiceProto, "://", ServiceHost, ServicePortUrlPart, "/fax/", JobId, ".tiff"]).
+
+proto_port_to_url_part(<<"http">>, 80) -> <<>>;
+proto_port_to_url_part(<<"https">>, 443) -> <<>>;
+proto_port_to_url_part(_, undefined) -> <<>>;
+proto_port_to_url_part(_, Port) -> list_to_binary([":", kz_term:to_binary(Port)]).
 
 -spec send_status(state(), kz_term:ne_binary()) -> any().
 send_status(State, Status) ->
