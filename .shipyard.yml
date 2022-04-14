@@ -1,10 +1,10 @@
 ---
 name: kazoo-application-fax
-base_branch: origin/master
+base_branch: origin/5.1
 metapackage:
   - name: meta-kazoo-applications
     type: required
-    branch: master
+    branch: '5.1'
     package: kazoo-application-fax
 base_core: kazoo
 template: kazoo-application.spec.tmpl
