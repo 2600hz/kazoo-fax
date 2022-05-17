@@ -142,7 +142,7 @@ delete() ->
 -spec start_new() -> 'ok' | {'error', 'cluster_not_formed'}.
 start_new() ->
     RaConfs = [make_ra_conf(ServerId) || ServerId <- members()],
-    case ra:start_cluster(fax_ra_node:ra_name(), RaConfs) of
+    case ra:start_cluster(ra_name(), RaConfs) of
         {'ok', _, _} -> 'ok';
         Else -> Else
     end.
