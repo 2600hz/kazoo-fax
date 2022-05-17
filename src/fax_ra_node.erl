@@ -131,19 +131,18 @@ join_add_member() ->
         Else -> Else
     end.
 
-%% lifted from ra/src/ra.hrl
--type ra_server_id() :: atom() | {Name :: atom(), Node :: node()}.
+-type ra_server_id() :: ra:server_id().
 
 -spec delete() ->
           {'ok', ra_server_id()} | {'error', term()}.
 delete() ->
-    {'ok', Members, _Leader} = ra:members(ra_name()),
+    {'ok', Members, _Leader} = ra:members(id()),
     ra:delete_cluster(Members).
 
 -spec start_new() -> 'ok' | {'error', 'cluster_not_formed'}.
 start_new() ->
     RaConfs = [make_ra_conf(ServerId) || ServerId <- members()],
-    case ra:start_cluster(RaConfs) of
+    case ra:start_cluster(fax_ra_node:ra_name(), RaConfs) of
         {'ok', _, _} -> 'ok';
         Else -> Else
     end.
@@ -154,7 +153,7 @@ stop() ->
 
 -spec available_nodes() -> [node()].
 available_nodes() ->
-    {'ok', Members, _Leader} = ra:members(ra_name()),
+    {'ok', Members, _Leader} = ra:members(id()),
     lists:usort([Node || {_, Node} <- Members, lists:member(Node, nodes())]).
 
 -spec rand_node() -> node().

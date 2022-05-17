@@ -278,7 +278,7 @@ update_job_state(JobId, State, Acc) ->
 %%------------------------------------------------------------------------------
 -spec process_command(any()) -> any().
 process_command(Cmd) ->
-    case ra:process_command(fax_ra_node:ra_name(), Cmd) of
+    case ra:process_command(fax_ra_node:id(), Cmd) of
         {'timeout', _} ->
             {'error', 'timeout'};
         {'error', _}=Error ->
@@ -289,7 +289,7 @@ process_command(Cmd) ->
 
 -spec query_state(fun()) -> any().
 query_state(Fun) ->
-    case ra:local_query(fax_ra_node:ra_name(), Fun) of
+    case ra:local_query(fax_ra_node:id(), Fun) of
         {'timeout', _} ->
             {'error', 'timeout'};
         {'error', _}=Error ->
