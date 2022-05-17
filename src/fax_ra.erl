@@ -597,7 +597,9 @@ start_worker({AccountId, JobId, Ref}) ->
     lager:debug("starting worker for job ~s (account id: ~s)", [JobId, AccountId]),
     Node = fax_ra_node:rand_node(),
     Reply = erpc:call(Node, 'fax_worker_sup', 'start_fax_job', [AccountId, JobId], ?START_WORKER_RPC_CALL_TIMEOUT),
-    ra:pipeline_command(fax_ra_node:id(), {'start_worker_result', {AccountId, JobId, Ref, Node, Reply}}).
+    ra:pipeline_command(fax_ra_node:id()
+                       ,{'start_worker_result', {AccountId, JobId, Ref, Node, Reply}}
+                       ).
 
 start_workers(ToStart) ->
     maps:fold(fun start_workers/3, ok, ToStart).
@@ -686,7 +688,7 @@ find_job_from_pid_in_accounts(Pid, Accounts) ->
     case maps:fold(fun find_job_from_pid_in_account/3, #{pid => Pid}, Accounts) of
         #{found := #{account_id := AccountId, job_id := JobId}} -> {ok, {AccountId, JobId}};
         _else -> {error, not_found}
-    end.
+         end.
 
 find_job_from_pid_in_account(AccountId, #{jobs := Jobs}, Map) ->
     maps:fold(fun find_job_from_pid_in_account_jobs/3, Map#{account_id => AccountId}, Jobs).

@@ -206,7 +206,10 @@ start_processing_account(AccountId, JobIds) ->
 
 -spec start_account_worker(kz_term:ne_binary(), kz_term:ne_binary(), kz_term:ne_binaries()) -> kz_term:ne_binaries().
 start_account_worker(AccountId, JobId, Acc) ->
-    case ra:process_command(fax_ra_node:ra_name(), {'start_worker', {AccountId, JobId, make_ref()}}) of
+    case ra:process_command(fax_ra_node:id()
+                           ,{'start_worker', {AccountId, JobId, make_ref()}}
+                           )
+    of
         {'ok', {'error', {'exists', _Job}}, _ServerId} ->
             Acc;
         {'ok', {'error', Error}, _} ->

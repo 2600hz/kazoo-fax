@@ -164,6 +164,4 @@ rand_node() ->
 -spec rand_node([node()]) -> node().
 rand_node([]) -> node();
 rand_node(Nodes) ->
-    Size = length(Nodes),
-    Selected = rand:uniform(Size),
-    lists:nth(Selected, Nodes).
+    hd(kz_term:shuffle_list(Nodes)).
