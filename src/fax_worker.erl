@@ -1,5 +1,5 @@
 %%%-----------------------------------------------------------------------------
-%%% @copyright (C) 2012-2021, 2600Hz
+%%% @copyright (C) 2012-2023, 2600Hz
 %%% @doc Worker to pull jobs
 %%% @author Karl Anderson
 %%% @author Luis Azedo
@@ -445,13 +445,10 @@ release_failed_job('uncontrolled_termination', _, JObj) ->
              ],
     release_job(Result, JObj);
 release_failed_job('fax_result', Resp, JObj) ->
-    <<"sip:", Code/binary>> = kz_json:get_value(<<"Hangup-Code">>, Resp, <<"sip:487">>),
+    ApplicationData = kz_json:get_json_value(<<"Application-Data">>, Resp),
     Result = props:filter_undefined(
                [{<<"time_elapsed">>, elapsed_time(JObj)}
-               ,{<<"result_code">>, kz_term:to_integer(Code)}
-               ,{<<"result_cause">>, kz_json:get_value(<<"Hangup-Cause">>, Resp)}
-               ,{<<"success">>, 'false'}
-               | fax_util:fax_properties(kz_json:get_value(<<"Application-Data">>, Resp, Resp))
+               | fax_util:fax_properties(ApplicationData)
                ]),
     release_job(Result, JObj, Resp);
 release_failed_job('job_timeout', 'undefined', JObj) ->
@@ -688,12 +685,21 @@ notify_emails(JObj) ->
                                       ),
     fax_util:notify_email_list(Emails).
 
+-spec fax_hangup_code(kz_json:object()) -> kz_term:api_integer().
+fax_hangup_code(JObj) ->
+    case kz_json:get_ne_binary_value(<<"Hangup-Code">>, JObj) of
+        <<"sip:", Code/binary>> -> kz_term:to_integer(Code);
+        _Else -> undefined
+    end.
+
+-spec fax_hangup_cause(kz_json:object()) -> kz_term:api_ne_binary().
+fax_hangup_cause(JObj) ->
+    kz_json:get_ne_binary_value(<<"Hangup-Cause">>, JObj).
+
 -spec notify_fields(kz_json:object(), kz_json:object()) -> kz_term:proplist().
 notify_fields(JObj, Resp) ->
-    <<"sip:", HangupCode/binary>> = kz_json:get_value(<<"Hangup-Code">>, Resp, <<"sip:0">>),
-    HangupCause = kz_json:get_value(<<"Hangup-Cause">>, Resp),
-    FaxFields = [{<<"Fax-Hangup-Code">>, kz_term:to_integer(HangupCode)}
-                ,{<<"Fax-Hangup-Cause">>, HangupCause}
+    FaxFields = [{<<"Fax-Hangup-Code">>, fax_hangup_code(Resp)}
+                ,{<<"Fax-Hangup-Cause">>, fax_hangup_cause(Resp)}
                 | fax_fields(kz_json:get_value(<<"Application-Data">>, Resp))
                 ],
 
