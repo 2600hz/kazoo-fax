@@ -57,6 +57,7 @@
                ,page = 0  ::integer()
                ,status :: kz_term:api_ne_binary()
                ,monitor :: kz_term:pid_ref() | 'undefined'
+               ,hangup = true :: boolean()
                }).
 -type state() :: #state{}.
 
@@ -287,8 +288,8 @@ handle_info(_Info, State) ->
     {'noreply', State}.
 
 -spec handle_event(kz_json:object(), state()) -> gen_listener:handle_event_return().
-handle_event(_JObj, _State) ->
-    {'reply', []}.
+handle_event(_JObj, State) ->
+    {'reply', [], State#state{hangup = false}}.
 
 %%------------------------------------------------------------------------------
 %% @doc This function is called by a `gen_listener' when it is about to
@@ -299,8 +300,9 @@ handle_event(_JObj, _State) ->
 %% @end
 %%------------------------------------------------------------------------------
 -spec terminate(any(), state()) -> 'ok'.
-terminate(_Reason, #state{call=Call}) ->
-    kapps_call_command:hangup(Call).
+terminate(_Reason, #state{call=Call, hangup = true}) ->
+    kapps_call_command:hangup(Call);
+terminate(_Reason, _State) -> ok.
 
 %%------------------------------------------------------------------------------
 %% @doc Convert process state when code is changed.
@@ -334,7 +336,6 @@ start_receive_fax(#state{call=Call
     ResourceFlag = kapps_call:custom_channel_var(<<"Resource-Fax-Option">>, Call),
     LocalFile = get_fs_filename(NewState),
     send_status(NewState, list_to_binary(["New Fax from ", kapps_call:caller_id_number(Call)]), ?FAX_START, 'undefined'),
-    _ = kapps_call_command:b_answer_now(Call),
     lager:debug("receive fax ~s - t.38 ~p / ~p", [FaxId, ResourceFlag, ReceiveFlag]),
     kapps_call_command:receive_fax(ResourceFlag, ReceiveFlag, LocalFile, Call),
     {'noreply', NewState}.
@@ -478,8 +479,7 @@ overridden_fax_identity(Call, JObj) ->
      ).
 
 -spec end_receive_fax(kz_json:object(), state()) -> handle_cast_return().
-end_receive_fax(JObj, #state{call=Call}=State) ->
-    kapps_call_command:hangup(Call),
+end_receive_fax(JObj, State) ->
     case kz_json:is_true([<<"Application-Data">>,<<"Fax-Success">>], JObj, 'false') of
         'true' ->
             end_receive_fax(State#state{fax_result=JObj});
