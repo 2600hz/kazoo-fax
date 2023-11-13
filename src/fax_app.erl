@@ -1,5 +1,5 @@
 %%%-----------------------------------------------------------------------------
-%%% @copyright (C) 2012-2021, 2600Hz
+%%% @copyright (C) 2012-2023, 2600Hz
 %%% @doc
 %%% This Source Code Form is subject to the terms of the Mozilla Public
 %%% License, v. 2.0. If a copy of the MPL was not distributed with this
@@ -22,6 +22,7 @@
 %%------------------------------------------------------------------------------
 -spec start(application:start_type(), any()) -> kz_types:startapp_ret().
 start(_Type, _Args) ->
+    kz_events:start_call_events(),
     register_views(),
     _ = kapps_maintenance:bind('migrate', 'fax_maintenance', 'migrate'),
     _ = kapps_maintenance:bind_and_register_views('fax', 'fax_app', 'register_views'),

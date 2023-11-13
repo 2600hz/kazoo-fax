@@ -1,5 +1,5 @@
 %%%-----------------------------------------------------------------------------
-%%% @copyright (C) 2014-2021, 2600Hz
+%%% @copyright (C) 2014-2023, 2600Hz
 %%% @doc
 %%% @author Luis Azedo
 %%%
@@ -985,6 +985,7 @@ send_outbound_smtp_fax_error(#state{account_id=AccountId
                 [{<<"Account-ID">>, AccountId}
                 ,{<<"Fax-From-Email">>, From}
                 ,{<<"Fax-To-Email">>, To}
+                ,{<<"Fax-Email-Subject">>, maybe_subject(State)}
 
                 ,{<<"Errors">>, Errors}
                 ,{<<"Original-Number">>, FaxNumber}
@@ -995,6 +996,12 @@ send_outbound_smtp_fax_error(#state{account_id=AccountId
                 ]),
     %% Do not crash if fields were undefined
     kapps_notify_publisher:cast(Message, fun kapi_notifications:publish_fax_outbound_smtp_error/1).
+
+-spec maybe_subject(state()) -> kz_term:api_ne_binary().
+maybe_subject(#state{doc='undefined'}) ->
+    'undefined';
+maybe_subject(#state{doc=JObj}) ->
+    kz_json:get_ne_binary_value(<<"subject">>, JObj).
 
 -spec maybe_add_faxbox_info(state()) -> kz_term:proplist().
 maybe_add_faxbox_info(#state{faxbox='undefined'}) ->

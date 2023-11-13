@@ -1,5 +1,5 @@
 %%%-----------------------------------------------------------------------------
-%%% @copyright (C) 2012-2021, 2600Hz
+%%% @copyright (C) 2012-2023, 2600Hz
 %%% @doc
 %%% @author Karl Anderson
 %%%
@@ -18,27 +18,33 @@
 
 -spec init(cowboy_req:req(), any()) ->
           {'ok', cowboy_req:req(), 'ok'}.
-init(Req0, _Opts) ->
+init(Req, _Opts) ->
     kz_log:put_callid(kz_binary:rand_hex(16)),
-    maybe_send_job_file(Req0, cowboy_req:path_info(Req0)).
+    send_job_file(Req, cowboy_req:path_info(Req)).
 
-maybe_send_job_file(Req0, [JobId]) ->
-    lager:debug("fetching fax job ~s", [JobId]),
-    TmpDir = kapps_config:get_binary(?CONFIG_CAT, <<"file_cache_path">>, <<"/tmp/">>),
-    File = list_to_binary([TmpDir, JobId]),
-    Req1 = case file:read_file(File) of
-               {'ok', Content} ->
-                   lager:debug("sending fax contents for ~s", [File]),
-                   Headers = #{<<"content-type">> => <<"image/tiff">>},
-                   cowboy_req:reply(200, Headers, Content, Req0);
-               {'error', _Reason} ->
-                   lager:debug("could not open file '~s': ~p", [File, _Reason]),
-                   cowboy_req:reply(404, Req0)
-           end,
-    {'ok', Req1, 'ok'};
-maybe_send_job_file(Req0, _Else) ->
+send_job_file(Req, [FileId]) ->
+    JobId = kz_term:to_binary(filename:basename(FileId, filename:extension(FileId))),
+    lager:debug("fetching fax job ~s/~s", [JobId, FileId]),
+    {'ok', get_job_file(Req, JobId), 'ok'};
+send_job_file(Req, _Else) ->
     lager:debug("not sending job file contents for ~p", [_Else]),
-    {'ok', cowboy_req:reply(404, Req0), 'ok'}.
+    {'ok', cowboy_req:reply(404, Req), 'ok'}.
+
+get_job_file(Req, JobId) ->
+    get_job_file(Req, JobId, kz_datamgr:open_doc(?KZ_FAXES_DB, JobId)).
+
+get_job_file(Req, JobId, {'error', _Reason}) ->
+    lager:debug("could not open document '~s' in faxes db : ~p", [JobId, _Reason]),
+    cowboy_req:reply(404, Req);
+get_job_file(Req, JobId, {'ok', JObj}) ->
+    get_attachment(Req, JobId, kz_fax_attachment:fetch_faxable(?KZ_FAXES_DB, JObj)).
+
+get_attachment(Req, JobId, {'ok', Content, ContentType, _Doc}) ->
+    lager:debug("sending fax file ~s : ~b bytes", [JobId, size(Content)]),
+    cowboy_req:reply(200, #{<<"content-type">> => ContentType}, Content, Req);
+get_attachment(Req, JobId, _Error) ->
+    lager:debug("could not get fax attachment for document '~s' in faxes db : ~p", [JobId, _Error]),
+    cowboy_req:reply(404, Req).
 
 -spec terminate(any(), cowboy_req:req(), any()) -> 'ok'.
 terminate(_Reason, _Req, _State) -> 'ok'.

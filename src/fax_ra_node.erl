@@ -1,5 +1,5 @@
 %%%-----------------------------------------------------------------------------
-%%% @copyright (C) 2012-2021, 2600Hz
+%%% @copyright (C) 2012-2023, 2600Hz
 %%% @doc
 %%% @author Luis Azedo
 %%%
@@ -30,7 +30,7 @@
 
 -include("fax.hrl").
 
--define(TICK_INTERVAL, 5 * ?MILLISECONDS_IN_SECOND).
+-define(TICK_INTERVAL, 20 * ?MILLISECONDS_IN_SECOND).
 
 %%------------------------------------------------------------------------------
 %% @doc

@@ -1,5 +1,5 @@
 %%%-----------------------------------------------------------------------------
-%%% @copyright (C) 2012-2021, 2600Hz
+%%% @copyright (C) 2012-2023, 2600Hz
 %%% @doc RA (Raft) integration
 %%% @author Luis Azedo
 %%%
@@ -19,12 +19,11 @@
         ,state_enter/2
         ,tick/2
         ,overview/1
+        ,init_aux/1
+        ,handle_aux/6
         ]).
 
 -export([start_worker/3]).
-
-%% Internal
--export([process_start_retry/2]).
 
 -include("fax.hrl").
 
@@ -41,13 +40,14 @@
                    {'remove_stale_worker', {account_id(), job_id()}} |
                    {'restart_job', {account_id(), job_id(), OldRef::reference(), NewRef::reference()}} |
                    {'start_worker', {account_id(), job_id(), reference()}} |
-                   {'start_worker_result', {account_id(), job_id(), reference(), node(), start_worker_ret()}} |
-                   ra_machine:effect().
+                   {'start_worker_result', {account_id(), job_id(), reference(), node(), start_worker_ret()}}.
 
 -define(DEFAULT_LIMITS(AccountId)
        ,kapps_account_config:get_global(AccountId, ?CONFIG_CAT, <<"max_outbound">>, 10)
        ).
--define(RPC_CALL_TIMEOUT, 5 * ?MILLISECONDS_IN_SECOND).
+-define(IS_ALIVE_RPC_CALL_TIMEOUT, 10 * ?MILLISECONDS_IN_SECOND).
+-define(START_WORKER_RPC_CALL_TIMEOUT, 30 * ?MILLISECONDS_IN_SECOND).
+
 
 %%------------------------------------------------------------------------------
 %% @doc
@@ -59,7 +59,8 @@ init(#{name := Name}) ->
       accounts => #{},
       pids => #{},
       workers => #{},
-      jobs => #{}
+      jobs => #{},
+      retry => #{}
      }.
 
 %%------------------------------------------------------------------------------
@@ -72,36 +73,36 @@ init(#{name := Name}) ->
 
 apply(#{index := RaftIdx}
      ,{'down', Pid, 'normal'}
-     ,#{pids := Pids, accounts := Accounts} = State0
+     ,#{pids := Pids, accounts := Accounts} = State
      ) ->
-    case maps:get(Pid, Pids, 'undefined') of
-        #{account_id := AccountId, job_id := JobId} ->
+    case find_job_from_pid(Pid, Pids, Accounts) of
+        {ok, {AccountId, JobId}} ->
             kz_log:put_callid(JobId),
             lager:debug("job ~p terminated normally", [Pid]),
-            Account = maps:get(AccountId, Accounts, #{jobs => #{}}),
+            Account = maps:get(AccountId, Accounts, #{}),
             Jobs = maps:without([JobId], maps:get('jobs', Account, #{})),
-            State = case maps:size(Jobs) of
-                        0 -> State0#{pids => maps:without([Pid], Pids)
-                                    ,accounts => maps:without([AccountId], Accounts)
-                                    };
-                        _ -> State0#{pids => maps:without([Pid], Pids)
-                                    ,accounts => maps:update(AccountId, Account#{jobs => Jobs}, Accounts)
-                                    }
-                    end,
+            NewState = case maps:size(Jobs) of
+                           0 -> State#{pids => maps:without([Pid], Pids)
+                                      ,accounts => maps:without([AccountId], Accounts)
+                                      };
+                           _ -> State#{pids => maps:without([Pid], Pids)
+                                      ,accounts => maps:update(AccountId, Account#{jobs => Jobs}, Accounts)
+                                      }
+                       end,
             Effects = [{'demonitor', 'process', Pid}
                       ,{'release_cursor', RaftIdx, State}
                       ],
-            {State, 'ok', Effects};
+            {NewState, 'ok', Effects};
         _ ->
-            {State0, 'ok'}
+            {State#{pids => maps:without([Pid], Pids)}, 'ok'}
     end;
 
 apply(#{index := RaftIdx}
      ,{'down', Pid, Error}
      ,#{pids := Pids, accounts := Accounts} = State
      ) ->
-    case maps:get(Pid, Pids, 'undefined') of
-        #{account_id := AccountId, job_id := JobId} ->
+    case find_job_from_pid(Pid, Pids, Accounts) of
+        {ok, {AccountId, JobId}} ->
             case maps:get(AccountId, Accounts, 'undefined') of
                 #{jobs := #{JobId := #{ref := Ref, raft := Index} = Job} = Jobs} = Account ->
                     kz_log:put_callid(JobId),
@@ -120,17 +121,17 @@ apply(#{index := RaftIdx}
                                                     ,retried => maps:get('retried', Job, 0) + 1
                                                     }
                                    },
-                    StartRetry = maps:put({AccountId, JobId, Ref}, 'true', maps:get('start_retry', State, #{})),
+                    Retry = add_job_retry(AccountId, JobId, Ref, State),
                     NewState = State#{pids => maps:without([Pid], Pids)
                                      ,accounts => Accounts#{AccountId => Account#{jobs => NewJobs}}
-                                     ,start_retry => StartRetry
+                                     ,retry => Retry
                                      },
                     {NewState, 'ok', []};
                 _Other ->
                     {State#{pids => maps:without([Pid], Pids)}, {'error', 'not_found'}}
             end;
 
-        _ -> {State, 'ok'}
+        _ -> {State#{pids => maps:without([Pid], Pids)}, 'ok'}
     end;
 
 apply(#{index := RaftIdx}
@@ -173,15 +174,13 @@ apply(#{index := RaftIdx}
                     {State0, {'error', 'process_is_alive'}};
                 'false' ->
                     Pid = maps:get('pid', Job, 'undefined'),
-                    {'ok', State1, _} =
-                        remove_job_from_account_state(AccountId, JobId, {Account, Job}, State0),
+                    {'ok', State1, _} = remove_job_from_account_state(AccountId, JobId, {Account, Job}, State0),
                     Effects = [{'demonitor', 'process', Pid}
                               ,{'release_cursor', RaftIdx, State1}
                               ],
                     {State1#{pids => maps:without([Pid], Pids)}, {'ok', Job}, Effects};
                 'no_pid' ->
-                    {'ok', State1, _} =
-                        remove_job_from_account_state(AccountId, JobId, {Account, Job}, State0),
+                    {'ok', State1, _} = remove_job_from_account_state(AccountId, JobId, {Account, Job}, State0),
                     Effects = [{'release_cursor', RaftIdx, State1}],
                     {State1, {'ok', Job}, Effects};
                 {'badrpc', _}=Bad ->
@@ -210,12 +209,15 @@ apply(#{index := RaftIdx}
             lager:debug("removing pid ~p", [Pid]),
             Account = maps:get(AccountId, Accounts, #{jobs => #{}}),
             Jobs = maps:without([JobId], maps:get('jobs', Account, #{})),
+            Retry = remove_retry_from_account(AccountId, JobId, State0),
             State = case maps:size(Jobs) of
                         0 -> State0#{pids => maps:without([Pid], Pids)
                                     ,accounts => maps:without([AccountId], Accounts)
+                                    ,retry => Retry
                                     };
                         _ -> State0#{pids => maps:without([Pid], Pids)
                                     ,accounts => maps:update(AccountId, Account#{jobs => Jobs}, Accounts)
+                                    ,retry => Retry
                                     }
                     end,
             Effects = [{'demonitor', 'process', Pid}
@@ -243,12 +245,40 @@ apply(#{index := RaftIdx}
                                          ,retried => maps:get('retried', Job, 0) + 1
                                          }
                            },
-            %% FIXME: demonitor old pid? remove old pid from state?
-            StartRetry = maps:put({AccountId, JobId, NewRef}, 'true', maps:get('start_retry', State, #{})),
+            Retry = add_job_retry(AccountId, JobId, NewRef, State),
             NewState = State#{accounts => Accounts#{AccountId => Account#{jobs => NewJobs}}
-                             ,start_retry => StartRetry
+                             ,retry => Retry
                              },
-            {NewState, 'ok', []};
+            {NewState, 'ok', [{aux, restart_job}]};
+        _Else ->
+            {State, {'error', 'not_found'}}
+    end;
+
+apply(#{index := RaftIdx}
+     ,{'restart_job', {AccountId, JobId}}
+     ,#{accounts := Accounts, pids := Pids} = State
+     ) ->
+    kz_log:put_callid(JobId),
+    case maps:get(AccountId, Accounts, 'undefined') of
+        #{jobs := #{JobId := #{ref := Ref, pid := Pid} = Job} = Jobs} = Account ->
+            Entry = #{restarted => 'true'
+                     ,raft => RaftIdx
+                     },
+            lager:debug("restarting the job ~s", [JobId]),
+            Hst = maps:get('history', Job, #{}),
+            History = Hst#{Ref => Entry},
+            NewRef = make_ref(),
+            NewJobs = Jobs#{JobId => Job#{history => History
+                                         ,ref => NewRef
+                                         ,retried => maps:get('retried', Job, 0) + 1
+                                         }
+                           },
+            Retry = add_job_retry(AccountId, JobId, NewRef, State),
+            NewState = State#{accounts => Accounts#{AccountId => Account#{jobs => NewJobs}}
+                             ,retry => Retry
+                             ,pids => maps:without([Pid], Pids)
+                             },
+            {NewState, 'ok', [{aux, restart_job}]};
         _Else ->
             {State, {'error', 'not_found'}}
     end;
@@ -258,11 +288,13 @@ apply(#{index := RaftIdx}
      ,#{pids := Pids, accounts := Accounts} = State
      ) ->
     kz_log:put_callid(JobId),
+    Retry = remove_retry_from_account(AccountId, JobId, State),
     case maps:get(AccountId, Accounts, 'undefined') of
         #{jobs := #{JobId := #{ref := Ref} = Job} = Jobs} = Account ->
             lager:debug("started job ~s with pid ~p", [JobId, Pid]),
             NewJobs = Jobs#{JobId => Job#{pid => Pid
                                          ,node => Node
+                                         ,started => kz_time:start_time()
                                          }
                            },
             NewPids = Pids#{Pid => #{account_id => AccountId
@@ -270,26 +302,26 @@ apply(#{index := RaftIdx}
                                     ,ref => Ref
                                     ,node => Node
                                     ,index => RaftIdx
+                                    ,started => kz_time:start_time()
                                     }
                            },
-            StartRetry = maps:without([{AccountId, JobId, Ref}], maps:get('start_retry', State, #{})),
             NewState = State#{accounts => Accounts#{AccountId => Account#{jobs => NewJobs}}
                              ,pids => NewPids
-                             ,start_retry => StartRetry
+                             ,retry => Retry
                              },
             Effects = [{'monitor', 'process', Pid}],
             {NewState, 'ok', Effects};
         _Else ->
-            {State, {'error', 'not_found'}}
+            {State#{retry => Retry}, {'error', 'not_found'}}
     end;
 
-apply(Meta
-     ,{'start_worker_result', {AccountId, JobId, Ref, Node, {'error', {'already_started', Pid}}}}
+apply(_Meta
+     ,{'start_worker_result', {AccountId, JobId, _Ref, _Node, {'error', {'already_started', Pid}}}}
      ,State
      ) ->
     kz_log:put_callid(JobId),
     lager:debug("pid ~p is already started", [Pid]),
-    apply(Meta, {'start_worker_result', {AccountId, JobId, Ref, Node, {'ok', Pid}}}, State);
+    State#{retry => remove_retry_from_account(AccountId, JobId, State)};
 
 apply(#{index := RaftIdx}
      ,{'start_worker_result', {AccountId, JobId, Ref, Node, Error}}
@@ -298,7 +330,7 @@ apply(#{index := RaftIdx}
     kz_log:put_callid(JobId),
     case maps:get(AccountId, Accounts, 'undefined') of
         #{jobs := #{JobId := #{ref := Ref, raft := Index} = Job} = Jobs} = Account ->
-            lager:debug("failed to start job ~s, will try it later: ~p", [JobId, Error]),
+            lager:debug_unsafe("failed to start job ~s, will try it later: ~p", [JobId, Error]),
             Entry = #{error => Error
                      ,node => Node
                      ,raft => Index
@@ -311,11 +343,11 @@ apply(#{index := RaftIdx}
                                          ,retried => maps:get('retried', Job, 0) + 1
                                          }
                            },
-            StartRetry = maps:put({AccountId, JobId, Ref}, 'true', maps:get('start_retry', State, #{})),
+            Retry = add_job_retry(AccountId, JobId, Ref, State),
             NewState = State#{accounts => Accounts#{AccountId => Account#{jobs => NewJobs}}
-                             ,start_retry => StartRetry
+                             ,retry => Retry
                              },
-            {NewState, 'ok', []};
+            {NewState, 'ok', [{aux, start_error}]};
         _Else ->
             {State, {'error', 'not_found'}}
     end;
@@ -339,8 +371,8 @@ apply(#{index := RaftIdx}
             {State#{accounts => maps:update(AccountId, Account#{jobs => NewJobs}, Accounts)}, 'ok', Effects};
         #{limit := _Limit} ->
             lager:debug("account ~s hit the worker limits ~b, saving the job for retry", [AccountId, _Limit]),
-            NewState = State#{start_retry => maps:put({AccountId, JobId, Ref}, 'true', maps:get('start_retry', State, #{}))},
-            {NewState, 'ok', []};
+            Retry = add_job_retry(AccountId, JobId, Ref, State),
+            {State#{retry => Retry}, 'ok', [{aux, {retry, AccountId, JobId, Ref}}]};
         _NoAccount ->
             Account = #{jobs => #{JobId => #{ref => Ref, raft => RaftIdx}}
                        ,limit => ?DEFAULT_LIMITS(AccountId)
@@ -357,6 +389,66 @@ apply(_Meta, _Msg, State) ->
 %% @doc
 %% @end
 %%------------------------------------------------------------------------------
+-spec state_enter(ra_server:ra_state(), state()) -> ra_machine:effects().
+state_enter('leader', #{accounts := Accounts, pids := PMap}) ->
+    RunningPids = maps:keys(PMap),
+    AccountPids = accounts_pids(Accounts),
+    Pids = lists:usort(RunningPids ++ AccountPids),
+    Mons = [{'monitor', 'process', P} || P <- Pids],
+    NodeMons = lists:usort([{'monitor', 'node', node(P)} || P <- Pids, node(P) =/= node()]),
+    Effects = Mons ++ NodeMons ++ [{aux, init}],
+    Effects;
+state_enter(_, _) -> [].
+
+%%------------------------------------------------------------------------------
+%% @doc
+%% @end
+%%------------------------------------------------------------------------------
+-spec tick(non_neg_integer(), state()) -> ra_machine:effects().
+tick(_Ts, _State) ->
+    _ = erlang:spawn('fax_ra_action', 'process_accounts', []),
+    [].
+
+%%------------------------------------------------------------------------------
+%% @doc
+%% @end
+%%------------------------------------------------------------------------------
+-spec init_aux(Name :: atom()) -> term().
+init_aux(Name) -> #{name => Name, retries => #{}}.
+
+%%------------------------------------------------------------------------------
+%% @doc
+%% @end
+%%------------------------------------------------------------------------------
+-spec handle_aux(ra_server:ra_state(),
+                 {call, From :: ra:from()} | cast,
+                 Command :: term(),
+                 AuxState,
+                 LogState,
+                 MacState :: state()) ->
+          {no_reply, AuxState, LogState}
+              when AuxState :: term(),
+                   LogState :: ra_log:state().
+handle_aux(leader, cast, tick, #{retries := Pending} = AuxState, LogState, #{accounts := Accounts, retry := Retry}) ->
+    case maps:size(Retry) of
+        0 ->
+            {no_reply, AuxState#{retries => #{}}, LogState};
+        _N ->
+            #{retry := RetryMap} = retry_keys(Retry),
+            #{retry := ToRetry} = process_retry(Accounts, Retry),
+            ToStart = maps:without(maps:keys(Pending), ToRetry),
+            StillPending = maps:with(maps:keys(RetryMap), Pending),
+            NewPending = maps:merge(StillPending, ToStart),
+            start_workers(ToStart),
+            {no_reply, AuxState#{retries => NewPending}, LogState}
+    end;
+handle_aux(_RA, _Type, _Command, AuxState, LogState, _MacState) ->
+    {no_reply, AuxState, LogState}.
+
+%%------------------------------------------------------------------------------
+%% @doc
+%% @end
+%%------------------------------------------------------------------------------
 -spec maybe_remove_account(AccountId::kz_term:ne_binary(), Account::map(), Accounts::map()) -> Accounts::map().
 maybe_remove_account(AccountId, #{jobs := Jobs}, Accounts) when map_size(Jobs) =:= 0 ->
     maps:without([AccountId], Accounts);
@@ -366,7 +458,8 @@ maybe_remove_account(AccountId, Account, Accounts) ->
 -spec maybe_remove_job_from_account_state(kz_term:ne_binary(), kz_term:ne_binary(), state()) ->
           {'ok', state(), Job::map()} |
           {'error', 'not_found'}.
-maybe_remove_job_from_account_state(AccountId, JobId, State) ->
+maybe_remove_job_from_account_state(AccountId, JobId, State0) ->
+    State = State0#{retry => remove_retry_from_account(AccountId, JobId, State0)},
     case get_account_job_from_state(AccountId, JobId, State) of
         {'ok', AccountJob} ->
             remove_job_from_account_state(AccountId, JobId, AccountJob, State);
@@ -377,7 +470,8 @@ maybe_remove_job_from_account_state(AccountId, JobId, State) ->
 -spec maybe_remove_job_from_account_state(kz_term:ne_binary(), kz_term:ne_binary(), reference(), state()) ->
           {'ok', state(), Job::map()} |
           {'error', 'not_found'}.
-maybe_remove_job_from_account_state(AccountId, JobId, Ref, State) ->
+maybe_remove_job_from_account_state(AccountId, JobId, Ref, State0) ->
+    State = State0#{retry => remove_retry_from_account(AccountId, JobId, State0)},
     case get_account_job_from_state(AccountId, JobId, State) of
         {'ok', {_Account, #{ref := Ref}}=AccountJob} ->
             remove_job_from_account_state(AccountId, JobId, AccountJob, State);
@@ -389,9 +483,10 @@ maybe_remove_job_from_account_state(AccountId, JobId, Ref, State) ->
           {'ok', state(), map()}.
 remove_job_from_account_state(AccountId, JobId
                              ,{Account, Job}
-                             ,#{accounts := Accounts} = State
+                             ,#{accounts := Accounts} = State0
                              ) ->
     lager:debug("removing job ~s", [JobId]),
+    State = State0#{retry => remove_retry_from_account(AccountId, JobId, State0)},
     NewJobs = maps:without([JobId], maps:get('jobs', Account, #{})),
     NewState = State#{accounts =>
                           maybe_remove_account(AccountId, Account#{jobs => NewJobs}, Accounts)
@@ -424,7 +519,7 @@ maybe_remove_pid_from_state(_, _, _Job, State) ->
     {State, []}.
 
 is_worker_alive(#{pid := Pid}=Job) ->
-    rpc:call(maps:get('node', Job, node()), 'erlang', 'is_process_alive', [Pid], ?RPC_CALL_TIMEOUT);
+    rpc:call(maps:get('node', Job, node()), 'erlang', 'is_process_alive', [Pid], ?IS_ALIVE_RPC_CALL_TIMEOUT);
 is_worker_alive(_) ->
     'no_pid'.
 
@@ -454,25 +549,6 @@ get_account_job_from_state(AccountId, JobId, State) ->
 %% @doc
 %% @end
 %%------------------------------------------------------------------------------
--spec state_enter(ra_server:ra_state(), state()) -> ra_machine:effects().
-state_enter('leader', #{pids := PMap}) ->
-    Pids = maps:keys(PMap),
-    Mons = [{'monitor', 'process', P} || P <- Pids],
-    NodeMons = lists:usort([{'monitor', 'node', node(P)} || P <- Pids]),
-    Effects = Mons ++ NodeMons,
-    Effects;
-state_enter(_, _) -> [].
-
--spec tick(non_neg_integer(), state()) -> ra_machine:effects().
-tick(_Ts, State) ->
-    _ = erlang:spawn('fax_ra_action', 'process_accounts', []),
-    _ = erlang:spawn(?MODULE, 'process_start_retry'
-                    ,[maps:get('accounts', State, #{})
-                     ,maps:get('start_retry', State, #{})
-                     ]
-                    ),
-    [].
-
 -spec overview(state()) -> map().
 overview(#{pids := Pids
           ,accounts := Accounts
@@ -484,27 +560,29 @@ overview(#{pids := Pids
       accounts => Accounts
      }.
 
--spec process_start_retry(map(), map()) -> 'ok'.
-process_start_retry(Accounts, StartRetry) ->
-    maps:fold(fun({A, J, R}, _, _) ->
-                      process_start_retry(A, J, R, Accounts)
-              end
-             ,'ok'
-             ,StartRetry
-             ).
+-spec process_retry(map(), map()) -> map().
+process_retry(Accounts, Retry) ->
+    maps:without([accounts,account_id,count,max], maps:fold(fun process_account_retry/3, #{retry => #{}, accounts => Accounts}, Retry)).
 
--spec process_start_retry(kz_term:ne_binary(), kz_term:ne_binary(), reference(), map()) -> 'ok'.
-process_start_retry(AccountId, JobId, Ref, Accounts) ->
-    case maps:get(AccountId, Accounts, 'undefined') of
-        #{limit := Limit, jobs := #{} = Jobs}
-          when Limit > map_size(Jobs) ->
-            _ = start_worker(AccountId, JobId, Ref),
-            'ok';
-        #{limit := _Limit} ->
-            'ok';
+process_account_retry(AccountId, Retry, #{accounts := Accounts} = Map) ->
+    case maps:get(AccountId, Accounts, undefined) of
+        #{limit := Limit, jobs := #{} = Jobs} when Limit > map_size(Jobs) ->
+            maps:fold(fun process_account_job_retry/3, Map#{account_id => AccountId, count => 0, max => Limit - map_size(Jobs)}, Retry);
+        #{limit := _Limit, jobs := #{} = _Jobs} ->
+            Map;
         _Other ->
-            _ = start_worker(AccountId, JobId, Ref),
-            'ok'
+            maps:fold(fun process_account_job_retry/3, Map#{account_id => AccountId, count => 0, max => ?DEFAULT_LIMITS(AccountId)}, Retry)
+    end.
+
+process_account_job_retry(JobId, Job, #{max := Max, count := Count, account_id := AccountId, retry := Retry} = Acc) ->
+    #{retry_ref := RetryRef, start := StartTime, sleep := Sleep} = Job,
+    case Count < Max
+        andalso kz_time:elapsed_ms(StartTime, kz_time:start_time()) > Sleep
+    of
+        true ->
+            Acc#{count => Count + 1, retry => Retry#{RetryRef => Job#{account_id => AccountId, job_id => JobId}}};
+        false ->
+            Acc
     end.
 
 %%------------------------------------------------------------------------------
@@ -518,5 +596,101 @@ start_worker(AccountId, JobId, Ref) ->
 start_worker({AccountId, JobId, Ref}) ->
     lager:debug("starting worker for job ~s (account id: ~s)", [JobId, AccountId]),
     Node = fax_ra_node:rand_node(),
-    Reply = rpc:call(Node, 'fax_worker_sup', 'start_fax_job', [AccountId, JobId], ?RPC_CALL_TIMEOUT),
-    ra:process_command(fax_ra_node:id(), {'start_worker_result', {AccountId, JobId, Ref, Node, Reply}}).
+    Reply = erpc:call(Node, 'fax_worker_sup', 'start_fax_job', [AccountId, JobId], ?START_WORKER_RPC_CALL_TIMEOUT),
+    ra:pipeline_command(fax_ra_node:id(), {'start_worker_result', {AccountId, JobId, Ref, Node, Reply}}).
+
+start_workers(ToStart) ->
+    maps:fold(fun start_workers/3, ok, ToStart).
+
+start_workers(_Ref, #{account_id := AccountId, job_id := JobId, reference := Ref}, _) ->
+    kz_process:spawn(fun start_worker/1 , [{AccountId, JobId, Ref}]);
+start_workers(_Ref, Map, _) ->
+    lager:error("NOT MATCHED => ~p", [{_Ref, Map}]).
+
+retry_at_least() -> 30 * ?MILLISECONDS_IN_SECOND.
+retry_random() -> rand:uniform(30) * ?MILLISECONDS_IN_SECOND.
+retry_sleep() -> retry_at_least() + retry_random().
+
+retry_info(Ref) ->
+    #{reference => Ref, retry_ref => make_ref(), start => kz_time:start_time(), sleep => retry_sleep()}.
+
+retry(State) ->
+    maps:get(retry, State, #{}).
+
+retry_account(AccountId, State) ->
+    maps:get(AccountId, retry(State), undefined).
+
+add_retry_to_account(AccountId, JobId, Data, State) ->
+    case retry_account(AccountId, State) of
+        undefined -> maps:put(AccountId, maps:put(JobId, Data, #{}), retry(State));
+        Retry -> maps:put(AccountId, maps:put(JobId, Data, Retry), retry(State))
+    end.
+
+remove_retry_from_account(AccountId, JobId, State) ->
+    case retry_account(AccountId, State) of
+        undefined ->
+            retry(State);
+        Retry ->
+            case maps:without([JobId], Retry) of
+                Map when map_size(Map) =:= 0 ->
+                    maps:without([AccountId], retry(State));
+                Map ->
+                    maps:put(AccountId, Map, retry(State))
+            end
+    end.
+
+retry_job(AccountId, JobId, State) ->
+    case retry_account(AccountId, State) of
+        undefined -> undefined;
+        Retry -> maps:get(JobId, Retry, undefined)
+    end.
+
+add_job_retry(AccountId, JobId, Ref, State) ->
+    case retry_job(AccountId, JobId, State) of
+        #{reference := Ref} ->
+            lager:debug("jobId ~s in account ~s was already in retry, restarting timer for reference ~p", [JobId, AccountId, Ref]),
+            add_retry_to_account(AccountId, JobId, retry_info(Ref), State);
+        undefined ->
+            lager:debug("starting timer for retrying jobId ~s in account ~s for reference ~p", [JobId, AccountId, Ref]),
+            add_retry_to_account(AccountId, JobId, retry_info(Ref), State);
+        #{reference := Other} ->
+            lager:debug("jobId ~s in account ~s was already in retry but with another reference, dropping ~p, assigning ~p and refstarting timer", [JobId, AccountId, Other, Ref]),
+            add_retry_to_account(AccountId, JobId, retry_info(Ref), State)
+    end.
+
+retry_keys(Retry) ->
+    maps:without([account_id], maps:fold(fun account_retry_keys/3, #{retry => #{}}, Retry)).
+
+account_retry_keys(AccountId, Retry, Map) ->
+    maps:fold(fun job_retry_key/3, Map#{account_id => AccountId}, Retry).
+
+job_retry_key(JobId, #{retry_ref := Ref} = Job, #{retry := Retry, account_id := AccountId} = Map) ->
+    Map#{retry => Retry#{Ref => Job#{account_id => AccountId, job_id => JobId}}}.
+
+accounts_pids(Accounts) ->
+    maps:fold(fun account_pids/3, [], Accounts).
+
+account_pids(_AccountId, #{jobs := Jobs}, Pids) ->
+    maps:fold(fun job_pid/3, Pids, Jobs).
+
+job_pid(_JobId, #{pid := Pid}, Pids) -> [Pid | Pids];
+job_pid(_JobId, _Job, Pids) -> Pids.
+
+find_job_from_pid(Pid, Pids, Accounts) ->
+    case maps:get(Pid, Pids, undefined) of
+        #{account_id := AccountId, job_id := JobId} -> {ok, {AccountId, JobId}};
+        undefined -> find_job_from_pid_in_accounts(Pid, Accounts)
+    end.
+
+find_job_from_pid_in_accounts(Pid, Accounts) ->
+    case maps:fold(fun find_job_from_pid_in_account/3, #{pid => Pid}, Accounts) of
+        #{found := #{account_id := AccountId, job_id := JobId}} -> {ok, {AccountId, JobId}};
+        _else -> {error, not_found}
+    end.
+
+find_job_from_pid_in_account(AccountId, #{jobs := Jobs}, Map) ->
+    maps:fold(fun find_job_from_pid_in_account_jobs/3, Map#{account_id => AccountId}, Jobs).
+
+find_job_from_pid_in_account_jobs(JobId, #{pid := Pid}, #{pid := Pid, account_id := AccountId} = Map) ->
+    Map#{found => #{account_id => AccountId, job_id => JobId}};
+find_job_from_pid_in_account_jobs(_JobId, _Job, Map) -> Map.
