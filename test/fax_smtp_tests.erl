@@ -1,5 +1,5 @@
 %%%-----------------------------------------------------------------------------
-%%% @copyright (C) 2014-2023, 2600Hz
+%%% @copyright (C) 2014-2024, 2600Hz
 %%% @doc
 %%% This Source Code Form is subject to the terms of the Mozilla Public
 %%% License, v. 2.0. If a copy of the MPL was not distributed with this
@@ -35,7 +35,7 @@ decode_email_test() ->
     ?assertEqual(?DATE, props:get_value(<<"Date">>, Hs)),
     ?assertEqual(?SUBJECT, props:get_value(<<"Subject">>, Hs)),
 
-    ?assertEqual(Boundary, props:get_value([<<"content-type-params">>, <<"boundary">>], Ps)),
+    ?assertEqual(Boundary, props:get_value(<<"boundary">>, fax_smtp:get_parameter(<<"content_type_params">>, Ps))),
 
     ?assertEqual(2, length(Body)),
 
