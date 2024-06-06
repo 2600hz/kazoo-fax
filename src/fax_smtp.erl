@@ -1,5 +1,5 @@
 %%%-----------------------------------------------------------------------------
-%%% @copyright (C) 2014-2023, 2600Hz
+%%% @copyright (C) 2014-2024, 2600Hz
 %%% @doc
 %%% @author Luis Azedo
 %%%
@@ -30,7 +30,9 @@
         ]).
 
 -ifdef(TEST).
--export([decode_data/1]).
+-export([decode_data/1
+        ,get_parameter/2
+        ]).
 -endif.
 
 -include("fax.hrl").
@@ -47,7 +49,7 @@
                ,doc :: kz_term:api_object()
                ,filename :: file:filename_all() | 'undefined'
                ,content_type :: kz_term:api_ne_binary()
-               ,peer_ip :: peer()
+               ,peer_ip :: inet:ip_address()
                ,owner_id :: kz_term:api_binary()
                ,owner_email :: kz_term:api_binary()
                ,faxbox_email :: kz_term:api_binary()
@@ -64,20 +66,19 @@
 -type state() :: #state{}.
 -type error_message() :: {'error', string(), #state{}}.
 
--type peer() :: {inet:ip_address(), non_neg_integer()}.
-
--spec init(kz_term:ne_binary(), non_neg_integer(), peer(), kz_term:proplist()) ->
-          {'ok', string(), #state{}} |
-          {'stop', _, string()}.
+-spec init(inet:hostname(), non_neg_integer(), inet:ip_address(), kz_term:proplist()) ->
+          {'ok', iolist(), state()} |
+          {'stop', _, iolist()}.
 init(Hostname, SessionCount, Address, Options) ->
-    case SessionCount > ?SMTP_MAX_SESSIONS  of
+    case SessionCount > ?SMTP_MAX_SESSIONS of
         'false' ->
             Banner = [Hostname, " Kazoo Email to Fax Server"],
+            SessionId = kz_binary:rand_hex(16),
             State = #state{options = Options
                           ,peer_ip = Address
-                          ,session_id = kz_binary:rand_hex(16)
+                          ,session_id = SessionId
                           },
-            kz_log:put_callid(State#state.session_id),
+            kz_log:put_callid(SessionId),
             {'ok', Banner, State};
         'true' ->
             lager:warning("connection limit exceeded ~p", [Address]),
@@ -173,6 +174,7 @@ handle_DATA(From, To, Data, #state{options=Options}=State) ->
     case decode_data(Data) of
         {Type, SubType, Headers, Parameters, Body} ->
             lager:debug("message decoded successfully!"),
+
             case process_message(Type, SubType, Headers, Parameters, Body, State) of
                 {ProcessResult, #state{errors=[]}=NewState} ->
                     {ProcessResult, Reference, NewState};
@@ -743,7 +745,8 @@ add_fax_document(#state{from=From
 %% @doc
 %% @end
 %%------------------------------------------------------------------------------
--spec process_message(kz_term:ne_binary(), kz_term:ne_binary(), kz_term:proplist(), kz_term:proplist(), binary() | mimemail:mimetuple(), state()) ->
+-type body() :: iodata() | mimemail:mimetuple() | [mimemail:mimetuple()].
+-spec process_message(kz_term:ne_binary(), kz_term:ne_binary(), kz_term:proplist(), map() | kz_term:proplist(), body(), state()) ->
           {'ok', state()}.
 process_message(<<"multipart">>, Multipart, Headers, _Parameters, Body, #state{errors=Errors}=State) ->
     NewState = maybe_get_subject(Headers, State),
@@ -800,7 +803,7 @@ process_parts([{Type, SubType, _Headers, Parameters, BodyPart}
                             ),
     process_parts(Parts, maybe_ignore_no_valid_attachment(NewState)).
 
--spec maybe_process_part(kz_term:ne_binary(), kz_term:proplist(), binary() | mimemail:mimetuple(), state()) ->
+-spec maybe_process_part(kz_term:ne_binary(), map() | kz_term:proplist(), body(), state()) ->
           {'ok', state()}.
 maybe_process_part(<<"multipart/", Multipart/binary>>, _Parameters, Body, #state{errors=Errors}=State) ->
     lager:debug("processing multipart/~s", [Multipart]),
@@ -821,10 +824,10 @@ maybe_process_part(<<"multipart/", Multipart/binary>>, _Parameters, Body, #state
     end;
 maybe_process_part(<<"application/octet-stream">>, Parameters, Body, State) ->
     lager:debug("part is application/octet-stream, try check attachment filename extension"),
-    case props:get_value(<<"disposition">>, Parameters) of
+    case get_parameter(<<"disposition">>, Parameters) of
         <<"attachment">> ->
-            DispositionParams = props:get_value(<<"disposition-params">>, Parameters, []),
-            ContentTypeParams = props:get_value(<<"content-type-params">>, Parameters, []),
+            DispositionParams = get_parameter(<<"disposition-params">>, Parameters, []),
+            ContentTypeParams = get_parameter(<<"content-type-params">>, Parameters, []),
             Props = DispositionParams ++ ContentTypeParams,
             Filename = kz_term:to_lower_binary(props:get_first_defined([<<"filename">>, <<"name">>], Props, <<>>)),
             case kz_mime:from_filename(Filename) of
@@ -840,16 +843,27 @@ maybe_process_part(<<"application/octet-stream">>, Parameters, Body, State) ->
     end;
 maybe_process_part(CT, _Parameters, Body, State) ->
     case {is_allowed_content_type(CT), CT} of
-        {true, <<"image/tiff">>} ->
+        {'true', <<"image/tiff">>} ->
             process_part(CT, Body, State);
-        {true, <<"image/", _/binary>>} ->
+        {'true', <<"image/", _/binary>>} ->
             maybe_process_image(CT, Body, State);
-        {true, _} ->
+        {'true', _} ->
             process_part(CT, Body, State);
         _ ->
             lager:debug("ignoring part ~s", [CT]),
             {'ok', State}
     end.
+
+get_parameter(Key, Parameters) ->
+    get_parameter(Key, Parameters, 'undefined').
+
+get_parameter(Key, Parameters, Default) when is_list(Parameters) ->
+    props:get_value(Key, Parameters, Default);
+get_parameter(<<Key/binary>>, #{}=Parameters, Default) ->
+    AtomKey = kz_term:to_atom(binary:replace(Key, <<"-">>, <<"_">>, ['global']), 'true'),
+    get_parameter(AtomKey, Parameters, Default);
+get_parameter(Key, #{}=Parameters, Default) when is_atom(Key) ->
+    maps:get(Key, Parameters, Default).
 
 -spec process_part(kz_term:ne_binary(), binary() | mimemail:mimetuple(), state()) -> {'ok', state()}.
 process_part(CT, Body, State) ->
