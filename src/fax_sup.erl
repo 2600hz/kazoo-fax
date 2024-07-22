@@ -26,7 +26,13 @@
 
 -define(CACHE_PROPS, [{'origin_bindings', ?ORIGIN_BINDINGS}]).
 
--define(SMTP_ARGS, ['fax_smtp' ,{'port', ?SMTP_PORT}]).
+-define(SMTP_ARGS, [{'protocol', 'tcp'}
+                   ,{'family', 'inet'}
+                   ,{'address', {0, 0, 0, 0}}
+                   ,{'port', ?SMTP_PORT}
+                   ,{'protocol', 'smtp'}
+                   ,{'callbackoptions', []} %% Options passed to fax_smtp:init/4
+                   ]).
 %% in case we want to make the settings constant per execution
 %%                                  ,{'sessionoptions', [?SMTP_CALLBACK_OPTIONS]}
 

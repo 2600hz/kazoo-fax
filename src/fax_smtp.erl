@@ -25,6 +25,9 @@
         ,handle_other/3
         ,handle_AUTH/4
         ,handle_STARTTLS/1
+
+        ,handle_error/3
+
         ,code_change/3
         ,terminate/2
         ]).
@@ -79,6 +82,7 @@ init(Hostname, SessionCount, Address, Options) ->
                           ,session_id = SessionId
                           },
             kz_log:put_callid(SessionId),
+            lager:info("init'd session from peer ~p", [Address]),
             {'ok', Banner, State};
         'true' ->
             lager:warning("connection limit exceeded ~p", [Address]),
@@ -177,8 +181,10 @@ handle_DATA(From, To, Data, #state{options=Options}=State) ->
 
             case process_message(Type, SubType, Headers, Parameters, Body, State) of
                 {ProcessResult, #state{errors=[]}=NewState} ->
+                    lager:debug("processed message successfully"),
                     {ProcessResult, Reference, NewState};
                 {ProcessResult, #state{errors=[Error | _]}=NewState} ->
+                    lager:info("error processing message: ~s", [Error]),
                     {ProcessResult, <<"554 ", Error/binary>>, NewState}
             end;
         'error' ->
@@ -251,6 +257,17 @@ handle_AUTH(_Type, _Username, _Password, _State) ->
 handle_STARTTLS(State) ->
     lager:debug("SMTP TLS Started"),
     State.
+
+-type reason() :: any().
+-spec handle_error(gen_smtp_server_session:error_class(), reason(), state()) ->
+          {'ok', state()} |
+          {'stop', reason(), state()}.
+handle_error('send_error', Reason, State) ->
+    lager:info("send error ~p during fax", [Reason]),
+    {'stop', 'normal', State};
+handle_error(Kind, Reason, State) ->
+    lager:info("error receiving fax: ~p:~p", [Kind, Reason]),
+    {'ok', State}.
 
 -spec code_change(any(), state(), any()) -> {'ok', state()}.
 code_change(_OldVsn, State, _Extra) ->
@@ -980,7 +997,9 @@ write_tmp_file('undefined', Extension, Body) ->
 write_tmp_file(Filename, Extension, Body) ->
     File = <<Filename/binary, ".", Extension/binary>>,
     case file:write_file(File, Body, []) of
-        'ok' -> {'ok', File};
+        'ok' ->
+            lager:debug("wrote body to ~s", [File]),
+            {'ok', File};
         {'error', _}=Error ->
             lager:debug("error writing file ~s : ~p", [Filename, Error]),
             Error
