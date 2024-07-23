@@ -22,16 +22,19 @@
 -export([init/1]).
 
 
--define(ORIGIN_BINDINGS, [[{'db', ?KZ_FAXES_DB}, {'type', <<"faxbox">>}]
-                         ]).
+-define(ORIGIN_BINDINGS, [[{'db', ?KZ_FAXES_DB}, {'type', <<"faxbox">>}]]).
 
--define(CACHE_PROPS, [{'origin_bindings', ?ORIGIN_BINDINGS}
-                     ]).
+-define(CACHE_PROPS, [{'origin_bindings', ?ORIGIN_BINDINGS}]).
 
--define(SMTP_ARGS, ['fax_smtp' ,[[{'port', ?SMTP_PORT}
-                                  %% in case we want to make the settings constant per execution
-                                  %%                                  ,{'sessionoptions', [?SMTP_CALLBACK_OPTIONS]}
-                                 ]]]).
+-define(SMTP_ARGS, [{'protocol', 'tcp'}
+                   ,{'family', 'inet'}
+                   ,{'address', {0, 0, 0, 0}}
+                   ,{'port', ?SMTP_PORT}
+                   ,{'protocol', 'smtp'}
+                   ,{'callbackoptions', []} %% Options passed to fax_smtp:init/4
+                   ]).
+%% in case we want to make the settings constant per execution
+%%                                  ,{'sessionoptions', [?SMTP_CALLBACK_OPTIONS]}
 
 -define(CHILDREN, [?WORKER('fax_init')
                   ,?CACHE_ARGS(?CACHE_NAME, ?CACHE_PROPS)
