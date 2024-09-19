@@ -1,4 +1,3 @@
-- 'Administrating Fax'
-  - 'doc/haproxy.md'
-  - 'doc/maintenance.md'
-  - 'doc/postfix.md'
+- 'doc/haproxy.md'
+- 'doc/postfix.md'
+- 'Maintenance Commands': 'doc/maintenance.md'
