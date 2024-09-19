@@ -1,0 +1,7 @@
+- 'Fax - Why is everyone faxinated with fax?':
+  - 'doc/README.md'
+  - 'doc/faxbox.md'
+  # - 'doc/haproxy.md'
+  # - 'doc/maintenance.md'
+  - 'doc/postfix.md'
+  - 'doc/user.md'
