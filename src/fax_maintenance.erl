@@ -1,5 +1,5 @@
 %%%-----------------------------------------------------------------------------
-%%% @copyright (C) 2012-2023, 2600Hz
+%%% @copyright (C) 2012-2024, 2600Hz
 %%% @doc Maintenance module for SUP.
 %%% @author Luis Azedo
 %%%
@@ -10,8 +10,6 @@
 %%% @end
 %%%-----------------------------------------------------------------------------
 -module(fax_maintenance).
-
--include("fax.hrl").
 
 %%==============================================================================
 %% API functions
@@ -44,6 +42,10 @@
         ]).
 
 -export([load_smtp_attachment/2]).
+
+-include("fax.hrl").
+
+-elvis([{elvis_style, no_debug_call, disable}]).
 
 -define(DEFAULT_MIGRATE_OPTIONS, [{'allow_old_modb_creation', 'true'}]).
 -define(OVERRIDE_DOCS, ['override_existing_document'
@@ -231,118 +233,105 @@ refresh_views() ->
 -spec flush() -> 'ok'.
 flush() -> kz_cache:flush_local(?CACHE_NAME).
 
--spec account_jobs(kz_term:ne_binary()) -> 'no_return'.
+-spec account_jobs(kz_term:ne_binary()) -> 'ok'.
 account_jobs(AccountId) ->
     account_jobs(AccountId, <<"pending">>).
 
--define(FORMAT_ACCOUNT_JOBS, "| ~-30s | ~-17s | ~-15s | ~-32s | ~-32s | ~-20s | ~-20s |~n").
-
-
--spec account_jobs(kz_term:ne_binary(), kz_term:ne_binary()) -> 'no_return'.
+-spec account_jobs(kz_term:ne_binary(), kz_term:ne_binary()) -> 'ok'.
 account_jobs(AccountId, State) ->
-    io:format("+--------------------------------+-------------------+-----------------+----------------------------------+----------------------------------+----------------------+----------------------+~n", []),
-    io:format(?FORMAT_ACCOUNT_JOBS
-             ,[<<"Job">>, <<"Date">>, <<"State">>, <<"Account">>, <<"Faxbox">>, <<"From">>, <<"To">>]
-             ),
-    io:format("+================================+===================+=================+==================================+==================================+======================+======================+~n", []),
     ViewOptions = [{'startkey', [AccountId, State]}
                   ,{'endkey', [AccountId, State, kz_json:new()]}
                   ],
 
     case kz_datamgr:get_results(?KZ_FAXES_DB, <<"faxes/list_by_account_state">>, ViewOptions) of
         {'ok', Jobs} ->
-            lists:foreach(fun print_view_result/1, Jobs);
+            Rows = [job_data(Job) || Job <- Jobs],
+            print_account_jobs(Rows);
         {'error', _Reason} ->
             io:format("Error getting faxes\n")
-    end,
-    io:format("+--------------------------------+-------------------+-----------------+----------------------------------+----------------------------------+----------------------+----------------------+~n", []),
-    'no_return'.
+    end.
 
-print_view_result(JObj) ->
-    ViewValue = kz_json:get_json_value(<<"value">>, JObj),
-    io:format(?FORMAT_ACCOUNT_JOBS
-             ,[kz_json:get_value([<<"id">>], ViewValue)
-              ,kz_time:format_datetime(
-                 kz_json:get_value([<<"modified">>], ViewValue)
-                )
-              ,kz_json:get_value([<<"status">>], ViewValue)
-              ,kz_json:get_value([<<"account_id">>], ViewValue)
-              ,kz_json:get_value([<<"faxbox_id">>], ViewValue, <<"(none)">>)
-              ,kz_json:get_value([<<"from">>], ViewValue)
-              ,kz_json:get_value([<<"to">>], ViewValue)
-              ]).
+print_account_jobs(Rows) ->
+    Header = [<<"Job">>, <<"Date">>, <<"State">>, <<"Account">>, <<"Faxbox">>, <<"From">>, <<"To">>],
+    kz_log:print_table([Header | Rows]).
 
--spec faxbox_jobs(kz_term:ne_binary()) -> 'no_return'.
+job_data(Job) ->
+    ViewValue = kz_json:get_json_value(<<"value">>, Job),
+    [kz_json:get_value([<<"id">>], ViewValue)
+    ,kz_time:format_datetime(
+       kz_json:get_value([<<"modified">>], ViewValue)
+      )
+    ,kz_json:get_value([<<"status">>], ViewValue)
+    ,kz_json:get_value([<<"account_id">>], ViewValue)
+    ,kz_json:get_value([<<"faxbox_id">>], ViewValue, <<"(none)">>)
+    ,kz_json:get_value([<<"from">>], ViewValue)
+    ,kz_json:get_value([<<"to">>], ViewValue)
+    ].
+
+-spec faxbox_jobs(kz_term:ne_binary()) -> 'ok'.
 faxbox_jobs(FaxboxId) ->
     faxbox_jobs(FaxboxId, <<"pending">>).
 
--spec faxbox_jobs(kz_term:ne_binary(), kz_term:ne_binary()) -> 'no_return'.
+-spec faxbox_jobs(kz_term:ne_binary(), kz_term:ne_binary()) -> 'ok'.
 faxbox_jobs(FaxboxId, State) ->
-    io:format("+--------------------------------+-------------------+-----------------+----------------------------------+----------------------------------+----------------------+----------------------+~n", []),
-    io:format(?FORMAT_ACCOUNT_JOBS, [<<"Job">>, <<"Date">>, <<"State">>, <<"Account">>, <<"Faxbox">>, <<"From">>, <<"To">>]),
-    io:format("+================================+===================+=================+==================================+==================================+======================+======================+~n", []),
     ViewOptions = [{'startkey', [FaxboxId, State]}
                   ,{'endkey', [FaxboxId, State, kz_json:new()]}
                   ],
 
     case kz_datamgr:get_results(?KZ_FAXES_DB, <<"faxes/list_by_faxbox_state">>, ViewOptions) of
         {'ok', Jobs} ->
-            lists:foreach(fun print_view_result/1, Jobs);
+            Rows = [job_data(Job) || Job <- Jobs],
+            print_account_jobs(Rows);
         {'error', _Reason} ->
-            io:format("Error getting faxes~n", [])
-    end,
-    io:format("+--------------------------------+-------------------+-----------------+----------------------------------+----------------------------------+----------------------+----------------------+~n", []),
-    'no_return'.
+            io:format("Error getting faxes: ~p~n", [_Reason])
+    end.
 
 -spec pending_jobs() -> 'no_return'.
 pending_jobs() ->
-    io:format("+----------------------------------+-------------------+----------------------------------+----------------------------------+----------------------+----------------------+-------+~n", []),
-    FormatString = "| ~-32s | ~-17s | ~-32s | ~-32s | ~-20s | ~-20s | ~-5s |~n",
-    io:format(FormatString, [<<"Job">>, <<"Date">>, <<"Account">>, <<"Faxbox">>, <<"From">>, <<"To">>, <<"Tries">>]),
-    io:format("+==================================+===================+==================================+==================================+======================+======================+=======+~n", []),
+    Header = [<<"Job">>, <<"Date">>, <<"Account">>, <<"Faxbox">>, <<"From">>, <<"To">>, <<"Tries">>],
     _ = case kz_datamgr:get_results(?KZ_FAXES_DB, <<"faxes/jobs">>) of
             {'ok', Jobs} ->
-                [io:format(FormatString, [kz_json:get_value([<<"value">>, <<"id">>], JObj)
-                                         ,kz_time:format_datetime(
-                                            kz_json:get_value([<<"value">>, <<"modified">>], JObj))
-                                         ,kz_json:get_value([<<"value">>, <<"account_id">>], JObj)
-                                         ,kz_json:get_value([<<"value">>, <<"faxbox_id">>], JObj, <<"(none)">>)
-                                         ,kz_json:get_value([<<"value">>, <<"from">>], JObj)
-                                         ,kz_json:get_value([<<"value">>, <<"to">>], JObj)
-                                         ,kz_json:get_value([<<"value">>, <<"tries">>], JObj)
-                                         ]) || JObj <- Jobs];
+                Rows = [[kz_json:get_value([<<"value">>, <<"id">>], JObj)
+                        ,kz_time:format_datetime(
+                           kz_json:get_value([<<"value">>, <<"modified">>], JObj)
+                          )
+                        ,kz_json:get_value([<<"value">>, <<"account_id">>], JObj)
+                        ,kz_json:get_value([<<"value">>, <<"faxbox_id">>], JObj, <<"(none)">>)
+                        ,kz_json:get_value([<<"value">>, <<"from">>], JObj)
+                        ,kz_json:get_value([<<"value">>, <<"to">>], JObj)
+                        ,kz_json:get_value([<<"value">>, <<"tries">>], JObj)
+                        ]
+                        || JObj <- Jobs
+                       ],
+                kz_log:print_table([Header | Rows], #{header_divider => $=});
             {'error', _Reason} ->
                 io:format("Error getting faxes~n", [])
         end,
     io:format("+----------------------------------+-------------------+----------------------------------+----------------------------------+----------------------+----------------------+-------+~n", []),
     'no_return'.
 
--spec active_jobs() -> 'no_return'.
+-spec active_jobs() -> 'ok'.
 active_jobs() ->
-    io:format("+----------------------+----------------------------------+-------------------+----------------------------------+----------------------------------+----------------------+----------------------+~n", []),
-    FormatString = "| ~-20s | ~-32s | ~-17s | ~-32s | ~-32s | ~-20s | ~-20s |~n",
-    io:format(FormatString, [<<"Node">>, <<"Job">>, <<"Date">>, <<"Account">>, <<"FaxBox">>, <<"From">>, <<"To">>]),
-    io:format("+======================+==================================+===================+==================================+==================================+======================+======================+~n", []),
-    _ = case kz_datamgr:get_results(?KZ_FAXES_DB, <<"faxes/processing_by_node">>) of
-            {'ok', Jobs} ->
-                [io:format(FormatString, [kz_json:get_value([<<"node">>], Value)
-                                         ,kz_json:get_value([<<"id">>], Value)
-                                         ,kz_time:format_datetime(
-                                            kz_json:get_value([<<"modified">>], Value)
-                                           )
-                                         ,kz_json:get_value([<<"account_id">>], Value)
-                                         ,kz_json:get_value([<<"faxbox_id">>], Value, <<"(none)">>)
-                                         ,kz_json:get_value([<<"from">>], Value)
-                                         ,kz_json:get_value([<<"to">>], Value)
-                                         ])
-                 || JObj <- Jobs,
-                    Value <- [kz_json:get_json_value(<<"value">>, JObj)]
-                ];
-            {'error', _Reason} ->
-                io:format("Error getting faxes~n", [])
-        end,
-    io:format("+----------------------+----------------------------------+-------------------+----------------------------------+----------------------------------+----------------------+----------------------+~n", []),
-    'no_return'.
+    Header = [<<"Node">>, <<"Job">>, <<"Date">>, <<"Account">>, <<"FaxBox">>, <<"From">>, <<"To">>],
+    case kz_datamgr:get_results(?KZ_FAXES_DB, <<"faxes/processing_by_node">>) of
+        {'ok', Jobs} ->
+            Rows = [[kz_json:get_value([<<"node">>], Value)
+                    ,kz_json:get_value([<<"id">>], Value)
+                    ,kz_time:format_datetime(
+                       kz_json:get_value([<<"modified">>], Value)
+                      )
+                    ,kz_json:get_value([<<"account_id">>], Value)
+                    ,kz_json:get_value([<<"faxbox_id">>], Value, <<"(none)">>)
+                    ,kz_json:get_value([<<"from">>], Value)
+                    ,kz_json:get_value([<<"to">>], Value)
+                    ]
+                    || JObj <- Jobs,
+                       Value <- [kz_json:get_json_value(<<"value">>, JObj)]
+                   ],
+            kz_log:print_table([Header | Rows], #{header_divider => $=});
+        {'error', _Reason} ->
+            io:format("Error getting faxes: ~p~n", [_Reason])
+    end.
 
 -spec restart_job(binary()) -> 'no_return'.
 restart_job(JobID) ->
@@ -396,18 +385,20 @@ migrate_outbound_faxes(Options) ->
         {'ok', []} ->
             io:format("finished crawling faxes db~n");
         {'ok', Docs} ->
-            Last = migrate_outbound_faxes(Docs, 'undefined'),
-            migrate_outbound_faxes([{'startkey', next_key(Last)}
+            LastDocId = migrate_outbound_faxes(Docs, 'undefined'),
+            migrate_outbound_faxes([{'startkey', next_key(LastDocId)}
                                    ,{'limit', props:get_value('limit', Options)}
                                    ])
     end.
 
 -spec migrate_outbound_faxes(kz_json:objects(), kz_term:api_binary()) -> kz_term:api_binary().
-migrate_outbound_faxes([], Acc) -> Acc;
-migrate_outbound_faxes([JObj | JObjs], _Acc) ->
+migrate_outbound_faxes(JObjs, Start) ->
+    lists:foldl(fun migrate_outbound_fax_fold/2, Start, JObjs).
+
+migrate_outbound_fax_fold(JObj, _Acc) ->
     DocId = kz_doc:id(JObj),
     maybe_migrate_outbound_fax(DocId),
-    migrate_outbound_faxes(JObjs, DocId).
+    DocId.
 
 -spec maybe_migrate_outbound_fax(kz_term:ne_binary()) -> 'ok'.
 maybe_migrate_outbound_fax(<<"_design/", _/binary>>) -> 'ok';
@@ -468,29 +459,27 @@ load_smtp_attachment(DocId, Filename, FileContents) ->
     end.
 
 
--spec account_workers(AccountId::kz_term:ne_binary()) -> 'no_return'.
+-spec account_workers(kz_term:ne_binary()) -> 'ok'.
 account_workers(AccountId) ->
-    io:format("+--------------------------------------------+----------------------------------+----------------+~n", []),
-    FormatString = "| ~-42s | ~-32s | ~-14s ~n",
-    io:format(FormatString, [<<"Node">>, <<"Job">>, <<"PID">>]),
-    io:format("+============================================+==================================+================+~n", []),
+    Header = [<<"Node">>, <<"Job">>, <<"PID">>],
+
     _ = case fax_ra_action:account_workers(AccountId) of
             {'ok', Jobs} ->
-                maps:fold(fun(JobId, Job, _) ->
-                                  io:format(FormatString, [maps:get('node', Job, 'undefined')
-                                                          ,JobId
-                                                          ,kz_binary:format("~p", [maps:get('pid', Job, 'undefined')])
-                                                          ]
-                                           )
-                          end
-                         ,'ok'
-                         ,Jobs
-                         );
+                Rows = maps:fold(fun(JobId, Job, Acc) ->
+                                         [[maps:get('node', Job, 'undefined')
+                                          ,JobId
+                                          ,kz_binary:format("~p", [maps:get('pid', Job, 'undefined')])
+                                          ]
+                                         | Acc
+                                         ]
+                                 end
+                                ,[]
+                                ,Jobs
+                                ),
+                kz_log:print_table([Header | Rows], #{header_divider => $=});
             {'error', _Reason} ->
                 io:format("failed to find workers for account ~s: ~p~n", [AccountId, _Reason])
-        end,
-    io:format("+--------------------------------------------+----------------------------------+----------------+~n", []),
-    'no_return'.
+        end.
 
 -spec remove_account_stale_workers(kz_term:ne_binary()) -> 'no_return'.
 remove_account_stale_workers(AccountId) ->
@@ -664,27 +653,27 @@ worker_info(AccountId, JobId) ->
             'no_return'
     end.
 
--spec locked_jobs() -> 'no_return'.
+-spec locked_jobs() -> 'ok'.
 locked_jobs() ->
-    io:format("+----------------------------------+-------------------+----------------------------------+----------------------------------+----------------------+----------------------+~n", []),
-    FormatString = "| ~-32s | ~-17s | ~-32s | ~-32s | ~-20s | ~-20s |~n",
-    io:format(FormatString, [<<"Job">>, <<"Last modified">>, <<"Account">>, <<"FaxBox">>, <<"From">>, <<"To">>]),
-    io:format("+==================================+===================+==================================+==================================+======================+======================+~n", []),
+    Header = [<<"Job">>, <<"Last modified">>, <<"Account">>, <<"FaxBox">>, <<"From">>, <<"To">>],
+
     _ = case kz_datamgr:get_results(?KZ_FAXES_DB, <<"faxes/locked_jobs_by_account">>) of
             {'ok', Jobs} ->
-                [io:format(FormatString, [kz_json:get_value([<<"value">>, <<"id">>], JObj)
-                                         ,kz_time:format_datetime(
-                                            kz_json:get_value([<<"value">>, <<"modified">>], JObj))
-                                         ,kz_json:get_value([<<"value">>, <<"account_id">>], JObj)
-                                         ,kz_json:get_value([<<"value">>, <<"faxbox_id">>], JObj, <<"(none)">>)
-                                         ,kz_json:get_value([<<"value">>, <<"from">>], JObj)
-                                         ,kz_json:get_value([<<"value">>, <<"to">>], JObj)
-                                         ]) || JObj <- Jobs];
+                Rows = [[kz_json:get_value([<<"value">>, <<"id">>], JObj)
+                        ,kz_time:format_datetime(
+                           kz_json:get_value([<<"value">>, <<"modified">>], JObj)
+                          )
+                        ,kz_json:get_value([<<"value">>, <<"account_id">>], JObj)
+                        ,kz_json:get_value([<<"value">>, <<"faxbox_id">>], JObj, <<"(none)">>)
+                        ,kz_json:get_value([<<"value">>, <<"from">>], JObj)
+                        ,kz_json:get_value([<<"value">>, <<"to">>], JObj)
+                        ]
+                        || JObj <- Jobs
+                       ],
+                kz_log:print_table([Header | Rows], #{header_divider => $=});
             {'error', _Reason} ->
-                io:format("Error getting faxes~n", [])
-        end,
-    io:format("+----------------------------------+-------------------+----------------------------------+----------------------------------+----------------------+----------------------+~n", []),
-    'no_return'.
+                io:format("Error getting locked jobs: ~p~n", [_Reason])
+        end.
 
 -spec get_locked_older_than(kz_term:proplist(), kz_time:gregorian_seconds()) ->
           {'ok', [{kz_term:ne_binary(), kz_term:ne_binary()}]} |

@@ -1,5 +1,5 @@
 %%%-----------------------------------------------------------------------------
-%%% @copyright (C) 2012-2023, 2600Hz
+%%% @copyright (C) 2012-2024, 2600Hz
 %%% @doc Process fax request.
 %%% @author James Aimonetti
 %%%
@@ -289,7 +289,7 @@ handle_info(_Info, State) ->
 
 -spec handle_event(kz_json:object(), state()) -> gen_listener:handle_event_return().
 handle_event(_JObj, State) ->
-    {'reply', [], State#state{hangup = false}}.
+    {'reply', [], State#state{hangup = 'false'}}.
 
 %%------------------------------------------------------------------------------
 %% @doc This function is called by a `gen_listener' when it is about to
@@ -300,9 +300,13 @@ handle_event(_JObj, State) ->
 %% @end
 %%------------------------------------------------------------------------------
 -spec terminate(any(), state()) -> 'ok'.
-terminate(_Reason, #state{call=Call, hangup = true}) ->
+terminate(_Reason
+         ,#state{call=Call
+                ,hangup = 'true'
+                }
+         ) ->
     kapps_call_command:hangup(Call);
-terminate(_Reason, _State) -> ok.
+terminate(_Reason, _State) -> 'ok'.
 
 %%------------------------------------------------------------------------------
 %% @doc Convert process state when code is changed.
@@ -795,6 +799,6 @@ new_request(JObj, _Props) ->
 -spec cancel(kz_term:ne_binary()) -> 'ok'.
 cancel(Id) ->
     case whereis(kz_term:to_atom(Id, 'true')) of
-        'undefined' -> io:format("job ~s not found", [Id]);
+        'undefined' -> 'ok';
         Pid -> gen_server:cast(Pid, 'cancel')
     end.

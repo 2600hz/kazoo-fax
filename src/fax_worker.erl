@@ -1,5 +1,5 @@
 %%%-----------------------------------------------------------------------------
-%%% @copyright (C) 2012-2023, 2600Hz
+%%% @copyright (C) 2012-2024, 2600Hz
 %%% @doc Worker to pull jobs
 %%% @author Karl Anderson
 %%% @author Luis Azedo
@@ -350,7 +350,7 @@ handle_event(JObj, #state{job_id=JobId}) ->
         'undefined' -> kz_log:put_callid(JobId);
         CallId -> kz_log:put_callid(<<JobId/binary, "|", CallId/binary>>)
     end,
-    {'reply', [{job_id, JobId}]}.
+    {'reply', [{'job_id', JobId}]}.
 
 %%------------------------------------------------------------------------------
 %% @doc This function is called by a `gen_server' when it is about to
@@ -615,7 +615,7 @@ try_move_doc(JObj) ->
     catch
         What:Why:ST ->
             kz_log:log_stacktrace(ST),
-            {error, {'EXIT', {What, Why}}}
+            {'error', {'EXIT', {What, Why}}}
     end.
 
 -spec move_doc(kz_json:object()) ->
@@ -694,7 +694,7 @@ notify_emails(JObj) ->
 fax_hangup_code(JObj) ->
     case kz_json:get_ne_binary_value(<<"Hangup-Code">>, JObj) of
         <<"sip:", Code/binary>> -> kz_term:to_integer(Code);
-        _Else -> undefined
+        _Else -> 'undefined'
     end.
 
 -spec fax_hangup_cause(kz_json:object()) -> kz_term:api_ne_binary().
@@ -897,10 +897,10 @@ bypass_e164(JObj) ->
 
 -spec get_proxy_url(kz_term:ne_binary()) -> kz_term:ne_binary().
 get_proxy_url(JobId) ->
-    get_proxy_url(JobId, kz_app_config:get_boolean(?APP, [<<"file">>, <<"use_service">>], true)).
+    get_proxy_url(JobId, kz_app_config:get_boolean(?APP, [<<"file">>, <<"use_service">>], 'true')).
 
-get_proxy_url(JobId, true) -> service_proxy_url(JobId);
-get_proxy_url(JobId, false) -> host_proxy_url(JobId).
+get_proxy_url(JobId, 'true') -> service_proxy_url(JobId);
+get_proxy_url(JobId, 'false') -> host_proxy_url(JobId).
 
 host_proxy_url(JobId) ->
     Hostname = kz_network_utils:get_hostname(),
@@ -910,7 +910,7 @@ host_proxy_url(JobId) ->
 service_proxy_url(JobId) ->
     service_proxy_url(JobId, kz_app_config:get_json(?APP, [<<"file">>, <<"service">>])).
 
-service_proxy_url(JobId, undefined) ->
+service_proxy_url(JobId, 'undefined') ->
     host_proxy_url(JobId);
 service_proxy_url(JobId, ServiceJSON) ->
     ServiceProto = kz_json:get_ne_binary_value(<<"proto">>, ServiceJSON, <<"http">>),
@@ -921,7 +921,7 @@ service_proxy_url(JobId, ServiceJSON) ->
 
 proto_port_to_url_part(<<"http">>, 80) -> <<>>;
 proto_port_to_url_part(<<"https">>, 443) -> <<>>;
-proto_port_to_url_part(_, undefined) -> <<>>;
+proto_port_to_url_part(_, 'undefined') -> <<>>;
 proto_port_to_url_part(_, Port) -> list_to_binary([":", kz_term:to_binary(Port)]).
 
 -spec send_status(state(), kz_term:ne_binary()) -> any().
