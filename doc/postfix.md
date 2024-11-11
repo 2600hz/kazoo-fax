@@ -1,6 +1,6 @@
 
 # Postfix role in smtp-to-fax
-Although you can expose kazoo fax on port 25 or use haproxy to relay incoming email messages directly to the fax_smtp server, we recommend to use Postfix to filter email spam before delivering to haproxy/kazoo
+Although you can expose {% BRAND_NAME %} fax on port 25 or use haproxy to relay incoming email messages directly to the fax_smtp server, we recommend to use Postfix to filter email spam before delivering to haproxy/kazoo
 
 # Simple Postfix setup
 ## install Postfix, python & curl
@@ -20,7 +20,7 @@ Although you can expose kazoo fax on port 25 or use haproxy to relay incoming em
 
 ```
 relay_domains = hash:/etc/postfix/kz_smtp_domains
-# relayhost should be the IP:PORT of haproxy-smtp-listener or kazoo fax whapp
+# relayhost should be the IP:PORT of haproxy-smtp-listener or {% BRAND_NAME %} fax whapp
 relayhost = 127.0.0.1:2525
 
 policy-spf_time_limit = 3600s
@@ -61,8 +61,8 @@ policy-spf  unix  -       n       n       -       0       spawn
 ```
 
 ## To-do
-* use CouchDB views to get kazoo faxboxes configuration into postfix
-* edit domains and permitted users from kazoo
+* use CouchDB views to get {% BRAND_NAME %} faxboxes configuration into postfix
+* edit domains and permitted users from {% BRAND_NAME %}
 * `postmap /etc/postfix/kz_smtp_domains`
 * `postmap /etc/postfix/kz_allowed_senders`
 * `postfix reload`

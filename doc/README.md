@@ -1,6 +1,6 @@
 # Fax
 
-Faxing is still a critical business requirement for many industries. The faxes app provides a set of faxing related features to kazoo accounts and supports sending and receiving faxes directly from email or the API. The fax entities can be tied to a callflow to terminate incoming faxes without having to use a fax machine.
+Faxing is still a critical business requirement for many industries. The faxes app provides a set of faxing related features to {% BRAND_NAME %} accounts and supports sending and receiving faxes directly from email or the API. The fax entities can be tied to a callflow to terminate incoming faxes without having to use a fax machine.
 
 ### Receive Fax Callflow Element
 
@@ -8,7 +8,7 @@ The original fax application feature added the ability to [create a call flow el
 
 ### Faxbox
 
-The faxbox acts as a virtual fax machine. The faxbox is used for both receiving and sending faxes. The faxbox is tied into the API and Email Notification systems and will send receipts or error notifications when a fax is sent or fails to send, send notifications when a fax is received and history and content of sent and received faxes can be retrieved via the faxes API. Faxboxes can be [added to kazoo call flows](https://github.com/2600hz/kazoo/blob/master/applications/callflow/doc/faxbox.md) just like receive fax, but unlike receive fax, multiple email addresses can be added to the notification list. Unlike receive fax, faxboxes can be used to send faxes, which can either be uploaded via the faxes API directly, or submitted by sending an email to the faxbox `smtp_email_address` or `custom_smtp_email_address` or the account `realm`. The faxbox supports multiple file formats for sending faxes, most commonly, `pdf`and `tiff`, but OpenXML and other OpenOffice compatible documents can be configured as well.
+The faxbox acts as a virtual fax machine. The faxbox is used for both receiving and sending faxes. The faxbox is tied into the API and Email Notification systems and will send receipts or error notifications when a fax is sent or fails to send, send notifications when a fax is received and history and content of sent and received faxes can be retrieved via the faxes API. Faxboxes can be [added to {% BRAND_NAME %} call flows](https://github.com/2600hz/kazoo/blob/master/applications/callflow/doc/faxbox.md) just like receive fax, but unlike receive fax, multiple email addresses can be added to the notification list. Unlike receive fax, faxboxes can be used to send faxes, which can either be uploaded via the faxes API directly, or submitted by sending an email to the faxbox `smtp_email_address` or `custom_smtp_email_address` or the account `realm`. The faxbox supports multiple file formats for sending faxes, most commonly, `pdf`and `tiff`, but OpenXML and other OpenOffice compatible documents can be configured as well.
 
 The faxes API also provide an email inbox/sent items type interface for accessing sent and received faxes and debugging failed fax transmission attempts. Checkout the [faxbox documentation](faxbox.md) for more details on how the faxbox works.
 
@@ -18,7 +18,7 @@ In addition to sending faxes via email to fax, the `crossbar` application provid
 
 ### Url
 
-If the `url` method is used, a url to access the document must be provided in the request body using a url that is reachable by kazoo.
+If the `url` method is used, a url to access the document must be provided in the request body using a url that is reachable by {% BRAND_NAME %}.
 
 ### Multipart
 
@@ -44,13 +44,13 @@ When the transmission succeeds, the file is put in the directory defined in the 
 
 When the transmission fails, an error notification is generated indicating the cause of the failure.
 
-## Kazoo Fax Converter And Attachment Storage Handling And Configuration
+## {% BRAND_NAME %} Fax Converter And Attachment Storage Handling And Configuration
 
 If a document is submitted for an outbound fax request in a format unsuitable for faxing (word or OpenXML document, pdf or tiff in a non-faxable format), the attachment will be converted to a fax compliant tiff. The conversions by default will occur whenever a fax document is received via the API or fax_smtp server.
 
-The parameters `store_fax_tiff`, `store_fax_pdf` and `store_fax_url` are used to dictate if the results of the conversions should be stored in the database, or if conversions should take place on the fly when a file in one of these formats are required. By default kazoo will store the original document, a faxable tiff version of the document, and a pdf generated from the faxable version of the document.
+The parameters `store_fax_tiff`, `store_fax_pdf` and `store_fax_url` are used to dictate if the results of the conversions should be stored in the database, or if conversions should take place on the fly when a file in one of these formats are required. By default {% BRAND_NAME %} will store the original document, a faxable tiff version of the document, and a pdf generated from the faxable version of the document.
 
-If these settings are NOT enabled, kazoo will fetch the original document either via the original file or if a url document is specified, fetching the document from the url using HTTP. Kazoo will then execute any conversions required for the type of file requested (faxable tiff or pdf) and do those conversions each time the fax is requested. This is much slower, especially for the API, but does reduce the size of the database documents since only the original document or document `url` is stored in the database. If `url` fax documents are provided and `store_fax_url` is set to `false`, every time the file is requested, it will be downloaded from the `url`, converted to the format required and that document will be returned.
+If these settings are NOT enabled, {% BRAND_NAME %} will fetch the original document either via the original file or if a url document is specified, fetching the document from the url using HTTP. {% BRAND_NAME %} will then execute any conversions required for the type of file requested (faxable tiff or pdf) and do those conversions each time the fax is requested. This is much slower, especially for the API, but does reduce the size of the database documents since only the original document or document `url` is stored in the database. If `url` fax documents are provided and `store_fax_url` is set to `false`, every time the file is requested, it will be downloaded from the `url`, converted to the format required and that document will be returned.
 
 ### Configuration Parameters
 

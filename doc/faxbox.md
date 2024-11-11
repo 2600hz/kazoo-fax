@@ -1,6 +1,6 @@
 ## Faxbox
 
-The faxbox provides all the functionality of a virtual fax machine. A `faxbox` is a configurable entity in kazoo which can be used to send and receive faxes. For more information about how to configure a faxbox see the [crossbar faxbox documentation](https://github.com/2600hz/kazoo/blob/master/applications/crossbar/doc/faxboxes.md).
+The faxbox provides all the functionality of a virtual fax machine. A `faxbox` is a configurable entity in {% BRAND_NAME %} which can be used to send and receive faxes. For more information about how to configure a faxbox see the [crossbar faxbox documentation](https://github.com/2600hz/kazoo/blob/master/applications/crossbar/doc/faxboxes.md).
 
 ## Receiving Faxes
 
@@ -9,15 +9,15 @@ The `faxbox`, like `receive_fax` can be [attached to a call flow](https://github
 
 ## Email to Fax
 
-Kazoo fax application uses an SMTP server, `fax_smtp` to receive the outbound fax requests and initiate a fax transmission using the content attached to the email.
+{% BRAND_NAME %} fax application uses an SMTP server, `fax_smtp` to receive the outbound fax requests and initiate a fax transmission using the content attached to the email.
 
 To initiate an email to fax, an email is sent by the user to the faxbox domain using the format: `{destination_phone_number}@faxbox_domain`.
 
-Kazoo will determine which faxbox should be used for transmission based on the sender email address and destination domain. If the sender is authorized to send a fax via the faxbox, a fax will be transmitted to the `destination_phone_number` provided in the user-part of the `to` email address using the `faxbox` domain name specified in the domain-part of the `to` email address.
+{% BRAND_NAME %} will determine which faxbox should be used for transmission based on the sender email address and destination domain. If the sender is authorized to send a fax via the faxbox, a fax will be transmitted to the `destination_phone_number` provided in the user-part of the `to` email address using the `faxbox` domain name specified in the domain-part of the `to` email address.
 
 ### DNS and Email
 
-The Kazoo fax SMTP server is found by email servers by looking up the MX record of either the realm assigned to the account, a custom smtp address, or the generated faxbox domain name.
+The {% BRAND_NAME %} fax SMTP server is found by email servers by looking up the MX record of either the realm assigned to the account, a custom smtp address, or the generated faxbox domain name.
 
 #### Custom SMTP Address
 
@@ -98,8 +98,8 @@ Also faxes can be transmitted by linking your google developer account to the fa
 
 ### Features
 
-* Google will render the document and deliver it as pdf to kazoo
-* The printer can be shared amongst users with google accounts without them being tied to kazoo
+* Google will render the document and deliver it as pdf to {% BRAND_NAME %}
+* The printer can be shared amongst users with google accounts without them being tied to {% BRAND_NAME %}
 * Can be used by any device with a browser connected to the internet
 * Native Drivers for Windows, OSX, Linux
 
@@ -112,7 +112,7 @@ Go to Credentials and create a new Web Application Client ID or use an existing 
 * EMAIL ADDRESS (Email)
 * CLIENT SECRET (Secret)
 
-You will need a reseller account or your master account id to configure this via kazoo.
+You will need a reseller account or your master account id to configure this via {% BRAND_NAME %}.
 
 Note: you can retrieve your master account with `sup kapps_util get_master_account_id`
 

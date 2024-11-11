@@ -41,7 +41,7 @@
 ## `account_workers/1`
 
 List all current account workers in the system. The processes may or may not live, or still in start/restart phase.
-The workers are running across all Kazoo nodes that is running the Fax application.
+The workers are running across all {% BRAND_NAME %} nodes that is running the Fax application.
 
 ```bash
 sup fax_maintenance account_workers {ACCOUNT_ID}
