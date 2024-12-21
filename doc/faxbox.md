@@ -1,10 +1,10 @@
 ## Faxbox
 
-The faxbox provides all the functionality of a virtual fax machine. A `faxbox` is a configurable entity in {% BRAND_NAME %} which can be used to send and receive faxes. For more information about how to configure a faxbox see the [crossbar faxbox documentation](https://github.com/2600hz/kazoo/blob/master/applications/crossbar/doc/faxboxes.md).
+The faxbox provides all the functionality of a virtual fax machine. A `faxbox` is a configurable entity in {% BRAND_NAME %} which can be used to send and receive faxes. For more information about how to configure a faxbox see the [Faxbox API](https://docs.2600hz.com/git/2600hz/kazoo-crossbar/doc/faxboxes.md).
 
 ## Receiving Faxes
 
-The `faxbox`, like `receive_fax` can be [attached to a call flow](https://github.com/2600hz/kazoo/blob/master/applications/callflow/doc/faxbox.md) and used to receive faxes, though unlike `receive_fax` which requires a one to one relationship between the `receive_fax` call flow element and an email address, faxbox permits configuration of inbound recipient lists which will all receive a copy of the faxed document.
+The `faxbox`, like `receive_fax` can be attached to a [Faxbox callflow](https://docs.2600hz.com/git/2600hz/kazoo-callflow/doc/faxbox.md) and used to receive faxes, though unlike `receive_fax` which requires a one to one relationship between the `receive_fax` call flow element and an email address, faxbox permits configuration of inbound recipient lists which will all receive a copy of the faxed document.
 
 
 ## Email to Fax

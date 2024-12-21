@@ -4,17 +4,22 @@ Faxing is still a critical business requirement for many industries. The faxes a
 
 ### Receive Fax Callflow Element
 
-The original fax application feature added the ability to [create a call flow element](https://github.com/2600hz/kazoo/blob/master/applications/callflow/doc/receive_fax.md) that can be attached to a phone number and used to terminate faxes, generating an email to the user with the received faxed document attached. This feature has been replaced by the `faxbox` feature set, but the `receive fax` call flow element is still supported currently as a legacy feature.
+The original fax application feature added the ability to create a call flow [`receive_fax` element](https://docs.2600hz.com/git/2600hz/kazoo-callflow/doc/receive_fax.md) that can be attached to
+a phone number and used to terminate faxes, generating an email to the user with the received faxed document attached. 
+This feature has been replaced by the `faxbox` feature set, but the `receive fax` call flow element is still supported currently as a legacy feature.
 
 ### Faxbox
 
-The faxbox acts as a virtual fax machine. The faxbox is used for both receiving and sending faxes. The faxbox is tied into the API and Email Notification systems and will send receipts or error notifications when a fax is sent or fails to send, send notifications when a fax is received and history and content of sent and received faxes can be retrieved via the faxes API. Faxboxes can be [added to {% BRAND_NAME %} call flows](https://github.com/2600hz/kazoo/blob/master/applications/callflow/doc/faxbox.md) just like receive fax, but unlike receive fax, multiple email addresses can be added to the notification list. Unlike receive fax, faxboxes can be used to send faxes, which can either be uploaded via the faxes API directly, or submitted by sending an email to the faxbox `smtp_email_address` or `custom_smtp_email_address` or the account `realm`. The faxbox supports multiple file formats for sending faxes, most commonly, `pdf`and `tiff`, but OpenXML and other OpenOffice compatible documents can be configured as well.
+The faxbox acts as a virtual fax machine. The faxbox is used for both receiving and sending faxes. The faxbox is tied into the API and Email Notification systems
+and will send receipts or error notifications when a fax is sent or fails to send, send notifications when a fax is received and history and content of sent and
+received faxes can be retrieved via the faxes API. [Faxboxes](https://docs.2600hz.com/git/2600hz/kazoo-crossbar/doc/faxboxes.md) can be [added to call flow](https://docs.2600hz.com/git/2600hz/kazoo-crossbar/doc/callflows.md) just like receive fax,
+but unlike receive fax, multiple email addresses can be added to the notification list. Unlike receive fax, faxboxes can be used to send faxes, which can either be uploaded via the faxes API directly, or submitted by sending an email to the faxbox `smtp_email_address` or `custom_smtp_email_address` or the account `realm`. The faxbox supports multiple file formats for sending faxes, most commonly, `pdf`and `tiff`, but OpenXML and other OpenOffice compatible documents can be configured as well.
 
-The faxes API also provide an email inbox/sent items type interface for accessing sent and received faxes and debugging failed fax transmission attempts. Checkout the [faxbox documentation](faxbox.md) for more details on how the faxbox works.
+The faxes API also provide an email inbox/sent items type interface for accessing sent and received faxes and debugging failed fax transmission attempts. Checkout the [Faxbox](faxbox.md) documentation for more details on how the faxbox works.
 
-## Api Fax
+## Faxes HTTP API
 
-In addition to sending faxes via email to fax, the `crossbar` application provides [an API that can be used to deliver faxes using two methods](https://github.com/2600hz/kazoo/blob/master/applications/crossbar/doc/faxes.md), `url` and `multipart`.
+In addition to sending faxes via Email to Fax, the Crossbar provides [Faxes API](https://docs.2600hz.com/git/2600hz/kazoo-crossbar/doc/faxes.md) that can be used to deliver faxes using two methods: `url` and `multipart`.
 
 ### Url
 
