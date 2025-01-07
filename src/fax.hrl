@@ -66,5 +66,12 @@
        ,kapps_config:get_binary(?CONFIG_CAT, <<"file_cache_path">>, <<"/tmp/">>)
        ).
 
+-define(FAX_RA_NAME, fax_outbound).
+-define(FAX_RA_SYSTEM, faxes).
+-define(FAX_RA_SCOPE, faxes).
+-define(FAX_RA_MACHINE, fax_ra).
+-define(FAX_RA_TICK_INTERVAL, 20 * ?MILLISECONDS_IN_SECOND).
+-define(FAX_RA_AUTO_LEAVE, kz_app_config:get_boolean(?APP, [ra, auto_leave], false)).
+
 -define(FAX_HRL, 'true').
 -endif.
