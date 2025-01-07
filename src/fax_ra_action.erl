@@ -1,5 +1,5 @@
 %%%-----------------------------------------------------------------------------
-%%% @copyright (C) 2012-2024, 2600Hz
+%%% @copyright (C) 2012-2025, 2600Hz
 %%% @doc
 %%% @author Luis Azedo
 %%%
@@ -171,6 +171,7 @@ pending_accounts() ->
 
 -spec process_accounts() -> 'ok'.
 process_accounts() ->
+    erlang:put(kz_application, fax),
     AccountIds = pending_accounts(),
     process_accounts(AccountIds).
 
@@ -180,6 +181,7 @@ process_accounts(AccountIds) ->
 
 -spec process_account(kz_term:ne_binary()) -> 'ok'.
 process_account(AccountId) ->
+    kz_log:put_callid(AccountId),
     Upto = kz_time:now_s(),
     ViewOptions = [{'limit', ?DEFAULT_LIMITS(AccountId)}
                   ,{'startkey', [AccountId]}
@@ -206,7 +208,7 @@ start_processing_account(AccountId, JobIds) ->
 
 -spec start_account_worker(kz_term:ne_binary(), kz_term:ne_binary(), kz_term:ne_binaries()) -> kz_term:ne_binaries().
 start_account_worker(AccountId, JobId, Acc) ->
-    case ra:process_command(fax_ra_node:ra_name(), {'start_worker', {AccountId, JobId, make_ref()}}) of
+    case ra:process_command(fax_ra:ra_node(), {'start_worker', {AccountId, JobId, make_ref()}}) of
         {'ok', {'error', {'exists', _Job}}, _ServerId} ->
             Acc;
         {'ok', {'error', Error}, _} ->
@@ -237,16 +239,17 @@ lock_jobs(AccountId, JobIds) ->
 maybe_rollback_to_pending(_, []) -> 'ok';
 maybe_rollback_to_pending(AccountId, JobIds) ->
     lager:debug("failed to ~b jobs start worker for account ~s, rolling back to pending", [length(JobIds), AccountId]),
-    case lists:foldl(fun(JobId, Acc) ->
-                             update_job_state(JobId, <<"pending">>, Acc) end
-                    ,[]
-                    ,JobIds
-                    )
-    of
+    case rollback_to_pending(JobIds) of
         [] -> 'ok';
         Failed ->
             lager:error("failed to rollback to pending: ~s", [kz_binary:join(Failed)])
     end.
+
+rollback_to_pending(JobIds) ->
+    lists:foldl(fun rollback_to_pending_fold/2, [], JobIds).
+
+rollback_to_pending_fold(JobId, Acc) ->
+    update_job_state(JobId, <<"pending">>, Acc).
 
 %% lifted from fax_worker
 -define(DEFAULT_RETRY_PERIOD, kapps_config:get_integer(?CONFIG_CAT, <<"default_retry_period">>, 300)).
@@ -275,7 +278,7 @@ update_job_state(JobId, State, Acc) ->
 %%------------------------------------------------------------------------------
 -spec process_command(any()) -> any().
 process_command(Cmd) ->
-    case ra:process_command(fax_ra_node:ra_name(), Cmd) of
+    case ra:process_command(fax_ra:ra_node(), Cmd) of
         {'timeout', _} ->
             {'error', 'timeout'};
         {'error', _}=Error ->
@@ -286,7 +289,7 @@ process_command(Cmd) ->
 
 -spec query_state(fun()) -> any().
 query_state(Fun) ->
-    case ra:local_query(fax_ra_node:ra_name(), Fun) of
+    case ra:local_query(fax_ra:ra_node(), Fun) of
         {'timeout', _} ->
             {'error', 'timeout'};
         {'error', _}=Error ->
