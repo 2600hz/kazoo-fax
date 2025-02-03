@@ -26,6 +26,7 @@
 | `migrate/2` | `(Account,Options) | (Accounts,Option) | (Accounts,_) | ([],_) | (_,Options)` | |
 | `migrate_outbound_faxes/0` |  | |
 | `migrate_outbound_faxes/1` | `(Number) | (Options)` | |
+| `overview/0` |  | |
 | `pending_jobs/0` |  | |
 | `refresh_views/0` |  | |
 | `remove_account_stale_workers/1` | `(AccountId)` | |
