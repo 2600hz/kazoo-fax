@@ -394,7 +394,8 @@ apply(_Meta, _Msg, State) ->
 %% @end
 %%------------------------------------------------------------------------------
 -spec state_enter(ra_server:ra_state(), state()) -> ra_machine:effects().
-state_enter('leader', #{accounts := Accounts, pids := PMap}) ->
+state_enter('leader' = RAState, #{accounts := Accounts, pids := PMap}) ->
+    lager:debug("state enter ~s", [RAState]),
     RunningPids = maps:keys(PMap),
     AccountPids = accounts_pids(Accounts),
     Pids = lists:usort(RunningPids ++ AccountPids),
@@ -402,7 +403,9 @@ state_enter('leader', #{accounts := Accounts, pids := PMap}) ->
     NodeMons = lists:usort([{'monitor', 'node', node(P)} || P <- Pids, node(P) =/= node()]),
     Effects = Mons ++ NodeMons ++ [{'aux', 'init'}],
     Effects;
-state_enter(_, _) -> [].
+state_enter(RAState, _State) ->
+    lager:debug("state enter ~s", [RAState]),
+    [].
 
 %%------------------------------------------------------------------------------
 %% @doc
