@@ -8,6 +8,7 @@
         ]
     },
     "language": "javascript",
+    "autoupdate": false,
     "views": {
         "crossbar_listing": {
             "map": [
