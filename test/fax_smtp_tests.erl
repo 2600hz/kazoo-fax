@@ -18,7 +18,7 @@
 -define(TEXT, <<"Please find the attached PDF">>).
 
 decode_email_test() ->
-    BaseDir = code:lib_dir('fax', 'test'),
+    BaseDir = filename:join(code:lib_dir('fax'), "test"),
     {'ok', PDF} = file:read_file(filename:join([BaseDir, "pdf.pdf"])),
     Encoded = base64:encode(PDF),
 
