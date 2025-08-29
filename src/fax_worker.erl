@@ -1,5 +1,5 @@
 %%%-----------------------------------------------------------------------------
-%%% @copyright (C) 2012-2023, 2600Hz
+%%% @copyright (C) 2012-2025, 2600Hz
 %%% @doc Worker to pull jobs
 %%% @author Karl Anderson
 %%% @author Luis Azedo
@@ -838,7 +838,7 @@ send_fax(JobId, JObj, Q, ToDID) ->
                 ,{<<"Fax-Identity-Number">>, kz_json:get_value(<<"fax_identity_number">>, JObj)}
                 ,{<<"Fax-Identity-Name">>, kz_json:get_value(<<"fax_identity_name">>, JObj)}
                 ,{<<"Fax-Timezone">>, kzd_fax_box:timezone(JObj)}
-                ,{<<"Flags">>, [<<"fax">> | kz_json:get_value(<<"flags">>, JObj, [])]}
+                ,{<<"Flags">>, get_flags(JObj)}
                 ,{<<"Resource-Type">>, <<"originate">>}
                 ,{<<"Hunt-Account-ID">>, get_hunt_account_id(AccountId)}
                 ,{<<"Msg-ID">>, JobId}
@@ -856,23 +856,39 @@ send_fax(JobId, JObj, Q, ToDID) ->
     lager:debug("sending fax originate request ~s with call-id ~s", [JobId, CallId]),
     kapi_offnet_resource:publish_req(Request).
 
+-spec get_flags(kz_json:object()) -> kz_term:ne_binaries().
+get_flags(JObj) ->
+    Flags = [<<"fax">> | kz_json:get_ne_binaries(<<"flags">>, JObj, [])],
+    AccountId =  kz_doc:account_id(JObj),
+    Funs = [{fun kapps_call:set_account_id/2, AccountId}
+           ,{fun kapps_call:set_account_db/2, kzs_util:format_account_db(AccountId)}
+           ],
+    lists:uniq(Flags ++ kz_attributes:get_flags(?APP_NAME, kapps_call:exec(Funs, kapps_call:new()))).
+
 -spec get_hunt_account_id(kz_term:ne_binary()) -> kz_term:api_binary().
 get_hunt_account_id(AccountId) ->
     AccountDb = kzs_util:format_account_db(AccountId),
     Options = [{'key', <<"no_match">>}, 'include_docs'],
     case kz_datamgr:get_results(AccountDb, ?CALLFLOW_LIST, Options) of
         {'ok', [JObj]} -> maybe_hunt_account_id(kz_json:get_value([<<"doc">>, <<"flow">>], JObj), AccountId);
-        _ -> 'undefined'
+        _ -> default_hunt_account_id(AccountId)
     end.
 
 -spec maybe_hunt_account_id(kz_term:api_object(), kz_term:ne_binary()) -> kz_term:api_binary().
-maybe_hunt_account_id('undefined', _) -> 'undefined';
+maybe_hunt_account_id('undefined', AccountId) -> default_hunt_account_id(AccountId);
 maybe_hunt_account_id(JObj, AccountId) ->
     case kz_json:get_value(<<"module">>, JObj) of
         <<"resources">> ->
-            kz_json:get_value([<<"data">>, <<"hunt_account_id">>], JObj, AccountId);
+            kz_json:get_value([<<"data">>, <<"hunt_account_id">>], JObj, default_hunt_account_id(AccountId));
         _ ->
             maybe_hunt_account_id(kz_json:get_value([<<"children">>, <<"_">>], JObj), AccountId)
+    end.
+
+-spec default_hunt_account_id(kz_term:ne_binary()) -> kz_term:api_ne_binary().
+default_hunt_account_id(AccountId) ->
+    case kapps_call:should_use_local_resources(AccountId) of
+        'false' -> 'undefined';
+        'true' -> kapps_call:hunt_account_id(AccountId)
     end.
 
 -spec resource_ccvs(kz_term:ne_binary()) -> kz_json:object().
