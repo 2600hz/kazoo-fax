@@ -1,5 +1,5 @@
 %%%-----------------------------------------------------------------------------
-%%% @copyright (C) 2012-2024, 2600Hz
+%%% @copyright (C) 2012-2025, 2600Hz
 %%% @doc
 %%% This Source Code Form is subject to the terms of the Mozilla Public
 %%% License, v. 2.0. If a copy of the MPL was not distributed with this
@@ -43,6 +43,7 @@
                   ,?WORKER('fax_shared_listener')
                   ,gen_smtp_server:child_spec('fax_smtp', 'fax_smtp', ?SMTP_ARGS)
                    %%,?WORKER_ARGS('gen_smtp_server', ?SMTP_ARGS)
+                  ,?SUPER('fax_ra_sup')
                   ]).
 
 %%==============================================================================

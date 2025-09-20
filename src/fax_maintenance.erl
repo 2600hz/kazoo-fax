@@ -1,5 +1,5 @@
 %%%-----------------------------------------------------------------------------
-%%% @copyright (C) 2012-2023, 2600Hz
+%%% @copyright (C) 2012-2025, 2600Hz
 %%% @doc Maintenance module for SUP.
 %%% @author Luis Azedo
 %%%
@@ -41,6 +41,7 @@
         ,force_exit_single_stale_worker/2
 
         ,worker_info/2
+        ,overview/0
         ]).
 
 -export([load_smtp_attachment/2]).
@@ -724,3 +725,6 @@ remove_stale_workers(RemoveFun, [{AccountId, JobId} | Jobs], Acc) ->
             io:format("failed to remove with error ~p~n", [_Error]),
             remove_stale_workers(RemoveFun, Jobs, Acc)
     end.
+
+-spec overview() -> map() | system_not_started.
+overview() -> ra:overview(?FAX_RA_SYSTEM).

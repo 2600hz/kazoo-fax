@@ -1,5 +1,5 @@
 %%%-----------------------------------------------------------------------------
-%%% @copyright (C) 2012-2023, 2600Hz
+%%% @copyright (C) 2012-2025, 2600Hz
 %%% @doc RA (Raft) integration
 %%% @author Luis Azedo
 %%%
@@ -21,6 +21,10 @@
         ,overview/1
         ,init_aux/1
         ,handle_aux/6
+        ]).
+
+-export([ra_name/0
+        ,ra_node/0
         ]).
 
 -export([start_worker/3]).
@@ -330,7 +334,7 @@ apply(#{index := RaftIdx}
     kz_log:put_callid(JobId),
     case maps:get(AccountId, Accounts, 'undefined') of
         #{jobs := #{JobId := #{ref := Ref, raft := Index} = Job} = Jobs} = Account ->
-            lager:debug_unsafe("failed to start job ~s, will try it later: ~p", [JobId, Error]),
+            lager:notice("failed to start job ~s, will try it later: ~p", [JobId, Error]),
             Entry = #{error => Error
                      ,node => Node
                      ,raft => Index
@@ -390,7 +394,8 @@ apply(_Meta, _Msg, State) ->
 %% @end
 %%------------------------------------------------------------------------------
 -spec state_enter(ra_server:ra_state(), state()) -> ra_machine:effects().
-state_enter('leader', #{accounts := Accounts, pids := PMap}) ->
+state_enter('leader' = RAState, #{accounts := Accounts, pids := PMap}) ->
+    lager:debug("state enter ~s", [RAState]),
     RunningPids = maps:keys(PMap),
     AccountPids = accounts_pids(Accounts),
     Pids = lists:usort(RunningPids ++ AccountPids),
@@ -398,7 +403,9 @@ state_enter('leader', #{accounts := Accounts, pids := PMap}) ->
     NodeMons = lists:usort([{'monitor', 'node', node(P)} || P <- Pids, node(P) =/= node()]),
     Effects = Mons ++ NodeMons ++ [{aux, init}],
     Effects;
-state_enter(_, _) -> [].
+state_enter(RAState, _State) ->
+    lager:debug("state enter ~s", [RAState]),
+    [].
 
 %%------------------------------------------------------------------------------
 %% @doc
@@ -595,9 +602,9 @@ start_worker(AccountId, JobId, Ref) ->
 
 start_worker({AccountId, JobId, Ref}) ->
     lager:debug("starting worker for job ~s (account id: ~s)", [JobId, AccountId]),
-    Node = fax_ra_node:rand_node(),
+    Node = rand_node(),
     Reply = erpc:call(Node, 'fax_worker_sup', 'start_fax_job', [AccountId, JobId], ?START_WORKER_RPC_CALL_TIMEOUT),
-    ra:pipeline_command(fax_ra_node:id(), {'start_worker_result', {AccountId, JobId, Ref, Node, Reply}}).
+    ra:pipeline_command(ra_node(), {'start_worker_result', {AccountId, JobId, Ref, Node, Reply}}).
 
 start_workers(ToStart) ->
     maps:fold(fun start_workers/3, ok, ToStart).
@@ -605,7 +612,7 @@ start_workers(ToStart) ->
 start_workers(_Ref, #{account_id := AccountId, job_id := JobId, reference := Ref}, _) ->
     kz_process:spawn(fun start_worker/1 , [{AccountId, JobId, Ref}]);
 start_workers(_Ref, Map, _) ->
-    lager:error("NOT MATCHED => ~p", [{_Ref, Map}]).
+    lager:error("unexpected not matched => ~p", [{_Ref, Map}]).
 
 retry_at_least() -> 30 * ?MILLISECONDS_IN_SECOND.
 retry_random() -> rand:uniform(30) * ?MILLISECONDS_IN_SECOND.
@@ -686,7 +693,7 @@ find_job_from_pid_in_accounts(Pid, Accounts) ->
     case maps:fold(fun find_job_from_pid_in_account/3, #{pid => Pid}, Accounts) of
         #{found := #{account_id := AccountId, job_id := JobId}} -> {ok, {AccountId, JobId}};
         _else -> {error, not_found}
-    end.
+         end.
 
 find_job_from_pid_in_account(AccountId, #{jobs := Jobs}, Map) ->
     maps:fold(fun find_job_from_pid_in_account_jobs/3, Map#{account_id => AccountId}, Jobs).
@@ -694,3 +701,26 @@ find_job_from_pid_in_account(AccountId, #{jobs := Jobs}, Map) ->
 find_job_from_pid_in_account_jobs(JobId, #{pid := Pid}, #{pid := Pid, account_id := AccountId} = Map) ->
     Map#{found => #{account_id => AccountId, job_id => JobId}};
 find_job_from_pid_in_account_jobs(_JobId, _Job, Map) -> Map.
+
+-spec ra_name() -> ?FAX_RA_NAME.
+ra_name() -> ?FAX_RA_NAME.
+
+-spec ra_node() -> {?FAX_RA_NAME, node()}.
+ra_node() ->
+    {?FAX_RA_NAME, node()}.
+
+-spec available_nodes() -> [node()].
+available_nodes() ->
+    {'ok', Members, _Leader} = ra:members(ra_node()),
+    lists:usort([Node || {_, Node} <- Members, lists:member(Node, nodes())]).
+
+-spec rand_node() -> node().
+rand_node() ->
+    rand_node(available_nodes()).
+
+-spec rand_node([node()]) -> node().
+rand_node([]) -> node();
+rand_node(Nodes) ->
+    Size = length(Nodes),
+    Selected = rand:uniform(Size),
+    lists:nth(Selected, Nodes).
