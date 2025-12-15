@@ -59,7 +59,7 @@
 
 -define(ORIGINATE_TIMEOUT, ?MILLISECONDS_IN_MINUTE * 2).
 -define(NEGOTIATE_TIMEOUT, ?MILLISECONDS_IN_MINUTE * 2).
--define(PAGE_TIMEOUT, ?MILLISECONDS_IN_MINUTE * 5).
+-define(PAGE_TIMEOUT, kapps_config:get_integer(?CONFIG_CAT, <<"default_page_timeout_ms">>, ?MILLISECONDS_IN_MINUTE * 10)).
 
 -define(BINDINGS(JobId), [{'self', []}
                          ,{'fax', [{'restrict_to', ['query_status']}]}
