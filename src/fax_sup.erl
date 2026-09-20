@@ -40,6 +40,7 @@
                   ,?CACHE_ARGS(?CACHE_NAME, ?CACHE_PROPS)
                   ,?SUPER('fax_requests_sup')
                   ,?SUPER('fax_worker_sup')
+                  ,?SUPER('postfix_lookup_sup')
                   ,?WORKER('fax_shared_listener')
                   ,gen_smtp_server:child_spec('fax_smtp', 'fax_smtp', ?SMTP_ARGS)
                    %%,?WORKER_ARGS('gen_smtp_server', ?SMTP_ARGS)
